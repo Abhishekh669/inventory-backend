@@ -1,0 +1,107 @@
+
+# ==============================
+# Environment variables & Secrets
+# ==============================
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Credentials and private keys
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials/
+
+# ==============================
+# Go binaries & Build outputs
+# ==============================
+/bin/
+/build/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.app
+
+# Go workspace
+go.work
+go.work.sum
+
+# ==============================
+# Logs
+# ==============================
+*.log
+logs/
+tmp/
+
+# ==============================
+# Database
+# ==============================
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+*.backup
+/backups/
+
+# ==============================
+# IDE & Editors
+# ==============================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# ==============================
+# OS generated files
+# ==============================
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ==============================
+# Testing & Coverage
+# ==============================
+coverage/
+coverage.out
+*.cover
+test-results/
+
+# ==============================
+# Docker & Local development
+# ==============================
+docker-data/
+postgres-data/
+redis-data/
+
+# ==============================
+# Frontend (if applicable)
+# ==============================
+node_modules/
+.next/
+.nuxt/
+.cache/
+.parcel-cache/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# ==============================
+# Temporary files
+# ==============================
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
