@@ -65,12 +65,62 @@ var postgressSchemaOrderedTables = []struct {
 	{
 		Name: "categories",
 		Schema: `
-			CREATE TABLE categories (
-    			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			CREATE TABLE IF NOT EXISTS categories (
+    			id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     			name        VARCHAR(100) NOT NULL ,
 				slug 		VARCHAR(20) NOT NULL UNIQUE,
     			created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 			);	
+		`,
+	},
+	{
+		Name: "units",
+		Schema: `
+			CREATE TABLE IF NOT EXISTS units (
+  				id       	   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  				name           VARCHAR(30) NOT NULL UNIQUE,           -- pcs, kg, meter, bag ...
+  				allow_decimal  BOOLEAN NOT NULL DEFAULT FALSE
+			);				
+		`,
+	},
+	{
+		Name: "products",
+		Schema: `
+			
+			CREATE TABLE IF NOT EXISTS products (
+			    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			    sku                 VARCHAR(50) NOT NULL UNIQUE,
+			    name                VARCHAR(200) NOT NULL,
+
+			    category_id         UUID NOT NULL REFERENCES categories(id) ON DELETE SET NULL,
+			    unit_id             UUID NOT NULL REFERENCES units(id) ON DELETE RESTRICT,
+
+			    vat_rate            NUMERIC(5,2) NOT NULL DEFAULT 13,
+
+			    cost_price          NUMERIC(14,4) NOT NULL DEFAULT 0,
+			    cost_with_vat       NUMERIC(14,4) NOT NULL DEFAULT 0,
+
+			    margin_percent      NUMERIC(6,2) NOT NULL DEFAULT 0,
+
+			    selling_price       NUMERIC(14,2) NOT NULL DEFAULT 0,
+
+			    profit_per_unit     NUMERIC(14,4)
+			                        GENERATED ALWAYS AS (selling_price - cost_with_vat) STORED,
+
+			    re_order_level      NUMERIC(14,3) NOT NULL DEFAULT 0,
+			    current_stock       NUMERIC(14,3) NOT NULL DEFAULT 0,
+
+			    is_active           BOOLEAN NOT NULL DEFAULT TRUE,
+
+			    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+			    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+			);
+
+			CREATE INDEX idx_products_category ON products(category_id);
+			CREATE INDEX idx_products_unit ON products(unit_id);			
+			CREATE INDEX idx_products_created_at ON products(created_at);			
+			CREATE INDEX idx_products_current_stock ON products(current_stock);			
+			CREATE INDEX idx_products_name ON products(name);			
 		`,
 	},
 }

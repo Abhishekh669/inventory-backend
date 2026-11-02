@@ -30,3 +30,24 @@ type UpdateSettingRequest struct {
 	LowStockDefault float64 `json:"low_stock_default" db:"low_stock_default"`
 	BillFooter      *string `json:"bill_footer" db:"bill_footer"`
 }
+
+type Unit struct {
+	ID           uuid.UUID `db:"id" json:"id"`
+	Name         string    `db:"name" json:"name"`
+	AllowDecimal bool      `db:"allow_decimal" json:"allow_decimal"`
+}
+
+type UpdateUnit struct {
+	ID           uuid.UUID `json:"id" binding:"required"`
+	Name         string    `json:"name" binding:"required,max=30"`
+	AllowDecimal bool      `json:"allow_decimal"`
+}
+
+type CreateUnit struct {
+	Name         string `json:"name" binding:"required,max=30"`
+	AllowDecimal bool   `json:"allow_decimal"`
+}
+
+type DeleteUnits struct {
+	IDs []string `json:"ids" binding:"required,min=1"`
+}
