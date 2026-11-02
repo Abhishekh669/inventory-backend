@@ -62,6 +62,17 @@ var postgressSchemaOrderedTables = []struct {
 			CREATE INDEX IF NOT EXISTS idx_setting_name ON setting(name);
 		`,
 	},
+	{
+		Name: "categories",
+		Schema: `
+			CREATE TABLE categories (
+    			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    			name        VARCHAR(100) NOT NULL ,
+				slug 		VARCHAR(20) NOT NULL UNIQUE,
+    			created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+			);	
+		`,
+	},
 }
 
 func CreatePostgresTables(ctx context.Context, postgresPool *pgxpool.Pool) error {

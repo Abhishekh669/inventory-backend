@@ -10,5 +10,6 @@ func SetUpRoutes(app *gin.Engine, appConfig *app.App) {
 	apiGroup := app.Group("/api/v1")
 	UserServiceRouter(apiGroup, appConfig)
 	SettingServiceRouter(apiGroup, appConfig)
+	CategoryServiceRouter(apiGroup, appConfig)
 
 }

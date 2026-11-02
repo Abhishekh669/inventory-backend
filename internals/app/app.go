@@ -18,6 +18,10 @@ type App struct {
 	SettingService services.SettingService
 	SettingHandler handlers.SettingHandler
 
+	CategoryRepo    repository.CategoryRepo
+	CategoryService services.CategoryService
+	CategoryHandler handlers.CategoryHandler
+
 	PermissionChecker authMiddleware.PermissionChecker
 }
 
@@ -37,14 +41,23 @@ func New() (*App, error) {
 	settingService := services.NewSettingService(settingRepo)
 	settingHandler := handlers.NewSettingHandler(settingService)
 
+	categoryRepo := repository.NewCategoryRepository()
+	categoryService := services.NewCategoryService(categoryRepo)
+	categoryHandler := handlers.NewCategoryHandler(categoryService)
+
 	return &App{
 		UserRepo:    userRepo,
 		UserService: userService,
 		UserHandler: *userHandler,
 
-		SettingRepo:       settingRepo,
-		SettingService:    settingService,
-		SettingHandler:    *settingHandler,
+		SettingRepo:    settingRepo,
+		SettingService: settingService,
+		SettingHandler: *settingHandler,
+
+		CategoryRepo:    categoryRepo,
+		CategoryService: categoryService,
+		CategoryHandler: *categoryHandler,
+
 		PermissionChecker: *checker,
 	}, nil
 }

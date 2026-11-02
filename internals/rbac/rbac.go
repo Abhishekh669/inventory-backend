@@ -7,6 +7,12 @@ type Permission string
 const (
 	AllPermissions Permission = "*"
 
+	//category
+	CategoryView   Permission = "category.view"
+	CategoryCreate Permission = "category.create"
+	CategoryUpdate Permission = "category.update"
+	CategoryDelete Permission = "category.delete"
+
 	// products
 	ProductView   Permission = "product.view"
 	ProductCreate Permission = "product.create"
@@ -60,6 +66,7 @@ var RolePermissions = map[models.RoleType][]Permission{
 		StockView, StockAdjust, ExpenseManage,
 		DashboardView, ReportView,
 		GetSetting, UpdateSetting,
+		CategoryCreate, CategoryDelete, CategoryUpdate, CategoryView,
 	},
 
 	models.RoleCashier: {
