@@ -103,3 +103,60 @@ type ProductsListTypeResponse struct {
 	HasMore    bool               `json:"has_more"`
 	NextOffset int                `json:"next_offset"`
 }
+
+type ProductPriceHistory struct {
+	ID              uuid.UUID       `db:"id" json:"id"`
+	ProductID       uuid.UUID       `db:"product_id" json:"product_id"`
+	PurchaseItemID  *uuid.UUID      `db:"purchase_item_id" json:"purchase_item_id"` // nullable
+	UnitCost        decimal.Decimal `db:"unit_cost" json:"unit_cost"`
+	UnitCostWithVat decimal.Decimal `db:"unit_cost_with_vat" json:"unit_cost_with_vat"`
+	MarginPercent   decimal.Decimal `db:"margin_percent" json:"margin_percent"`
+	SellingPrice    decimal.Decimal `db:"selling_price" json:"selling_price"`
+	ProfitPerUnit   decimal.Decimal `db:"profit_per_unit" json:"profit_per_unit"`
+	EffectiveDate   time.Time       `db:"effective_date" json:"effective_date"`
+	CreatedAt       time.Time       `db:"created_at" json:"created_at"`
+}
+
+type ProductPriceHistoryListType struct {
+	ID              uuid.UUID       `db:"id" json:"id"`
+	ProductID       uuid.UUID       `db:"product_id" json:"product_id"`
+	ProductSKU      string          `db:"product_sku" json:"product_sku"`
+	ProductName     string          `db:"product_name" json:"product_name"`
+	PurchaseItemID  *uuid.UUID      `db:"purchase_item_id" json:"purchase_item_id"`
+	UnitCost        decimal.Decimal `db:"unit_cost" json:"unit_cost"`
+	UnitCostWithVat decimal.Decimal `db:"unit_cost_with_vat" json:"unit_cost_with_vat"`
+	MarginPercent   decimal.Decimal `db:"margin_percent" json:"margin_percent"`
+	SellingPrice    decimal.Decimal `db:"selling_price" json:"selling_price"`
+	ProfitPerUnit   decimal.Decimal `db:"profit_per_unit" json:"profit_per_unit"`
+	EffectiveDate   time.Time       `db:"effective_date" json:"effective_date"`
+	CreatedAt       time.Time       `db:"created_at" json:"created_at"`
+}
+
+type CreateProductPriceHistoryRequestType struct {
+	ProductID       uuid.UUID       `db:"product_id" json:"product_id"`
+	PurchaseItemID  *uuid.UUID      `db:"purchase_item_id" json:"purchase_item_id"`
+	UnitCost        decimal.Decimal `db:"unit_cost" json:"unit_cost"`
+	UnitCostWithVat decimal.Decimal `db:"unit_cost_with_vat" json:"unit_cost_with_vat"`
+	MarginPercent   decimal.Decimal `db:"margin_percent" json:"margin_percent"`
+	SellingPrice    decimal.Decimal `db:"selling_price" json:"selling_price"`
+	EffectiveDate   *time.Time      `db:"effective_date" json:"effective_date"` // nil -> DB default
+}
+
+type DeleteProductPriceHistoryRequestType struct {
+	IDs []string `json:"ids"`
+}
+
+type ProductPriceHistoryQueryType struct {
+	ProductID *uuid.UUID `json:"product_id"`
+	Limit     int32      `json:"limit"`
+	Page      int32      `json:"page"`
+	FromDate  *time.Time `json:"from_date"`
+	ToDate    *time.Time `json:"to_date"`
+}
+
+type ProductPriceHistoryListTypeResponse struct {
+	History    []ProductPriceHistoryListType `json:"history"`
+	Total      int                           `json:"total"`
+	HasMore    bool                          `json:"has_more"`
+	NextOffset int                           `json:"next_offset"`
+}

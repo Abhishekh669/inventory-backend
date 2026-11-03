@@ -22,6 +22,10 @@ type App struct {
 	CategoryService services.CategoryService
 	CategoryHandler handlers.CategoryHandler
 
+	ProductRepo    repository.ProductRepo
+	ProductService services.ProductService
+	ProductHandler handlers.ProductHandler
+
 	PermissionChecker authMiddleware.PermissionChecker
 }
 
@@ -45,6 +49,10 @@ func New() (*App, error) {
 	categoryService := services.NewCategoryService(categoryRepo)
 	categoryHandler := handlers.NewCategoryHandler(categoryService)
 
+	productRepo := repository.NewProductRepository()
+	productService := services.NewProductService(productRepo)
+	productHandler := handlers.NewProductHandler(productService)
+
 	return &App{
 		UserRepo:    userRepo,
 		UserService: userService,
@@ -57,6 +65,10 @@ func New() (*App, error) {
 		CategoryRepo:    categoryRepo,
 		CategoryService: categoryService,
 		CategoryHandler: *categoryHandler,
+
+		ProductRepo:    productRepo,
+		ProductService: productService,
+		ProductHandler: *productHandler,
 
 		PermissionChecker: *checker,
 	}, nil

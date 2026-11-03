@@ -17,6 +17,7 @@ const (
 	ProductView   Permission = "product.view"
 	ProductCreate Permission = "product.create"
 	ProductUpdate Permission = "product.update"
+	ProductDelete Permission = "product.delete"
 	CostView      Permission = "product.cost.view" // cost price and margins
 
 	// parties

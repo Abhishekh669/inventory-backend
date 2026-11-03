@@ -88,7 +88,7 @@ var postgressSchemaOrderedTables = []struct {
 		Schema: `
 			
 			CREATE TABLE IF NOT EXISTS products (
-			    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			    id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 			    sku                 VARCHAR(50) NOT NULL UNIQUE,
 			    name                VARCHAR(200) NOT NULL,
 
@@ -116,11 +116,31 @@ var postgressSchemaOrderedTables = []struct {
 			    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 			);
 
-			CREATE INDEX idx_products_category ON products(category_id);
-			CREATE INDEX idx_products_unit ON products(unit_id);			
-			CREATE INDEX idx_products_created_at ON products(created_at);			
-			CREATE INDEX idx_products_current_stock ON products(current_stock);			
-			CREATE INDEX idx_products_name ON products(name);			
+			CREATE INDEX  IF NOT EXISTS idx_products_category ON products(category_id);
+			CREATE INDEX  IF NOT EXISTS idx_products_unit ON products(unit_id);			
+			CREATE INDEX  IF NOT EXISTS idx_products_created_at ON products(created_at);			
+			CREATE INDEX  IF NOT EXISTS idx_products_current_stock ON products(current_stock);			
+			CREATE INDEX  IF NOT EXISTS idx_products_name ON products(name);			
+		`,
+	},
+	{
+		Name: "product_price_history",
+		Schema: `
+
+			CREATE TABLE IF NOT EXISTS product_price_history (
+			  id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			  product_id          uuid NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+			  purchase_item_id    uuid,                           -- FK added after purchase_items exists
+			  unit_cost           NUMERIC(14,4) NOT NULL,
+			  unit_cost_with_vat  NUMERIC(14,4) NOT NULL,
+			  margin_percent      NUMERIC(6,2)  NOT NULL,
+			  selling_price       NUMERIC(14,2) NOT NULL,
+			  profit_per_unit     NUMERIC(14,4)
+			                        GENERATED ALWAYS AS (selling_price - unit_cost_with_vat) STORED,
+			  effective_date      DATE NOT NULL DEFAULT CURRENT_DATE,
+			  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+			);
+			CREATE INDEX  IF NOT EXISTS idx_price_hist_product ON product_price_history(product_id, effective_date);
 		`,
 	},
 }
