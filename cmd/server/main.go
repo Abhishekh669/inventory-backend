@@ -116,7 +116,7 @@ func main() {
 	})
 
 	router.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:3000", "https://gharmai-shikshya-tms.vercel.app", "https://gharmai-shikshya-tms-git-main-abhishekh-nepali.vercel.app", "https://gharmai-shikshya-li0cr1qzs-abhishekh-nepali.vercel.app"},
+		AllowOrigins:     []string{"http://localhost:3000", "https://hitesh-traders-flax.vercel.app"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Content-Type", "Authorization", "Cookie"},
 		AllowCredentials: true,
