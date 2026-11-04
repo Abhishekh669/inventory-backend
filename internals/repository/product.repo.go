@@ -41,6 +41,7 @@ type ProductRepo interface {
 	CreateNewProduct(
 		ctx context.Context,
 		newProducts *[]models.CreateProductRequestType,
+		userId uuid.UUID,
 	) error
 
 	UpdateNewProduct(
@@ -63,7 +64,7 @@ var (
 	ErrInvalidCategoryOrUnit = errors.New("invalid category or unit")
 )
 
-func (r *productRepo) CreateNewProduct(ctx context.Context, newProducts *[]models.CreateProductRequestType) error {
+func (r *productRepo) CreateNewProduct(ctx context.Context, newProducts *[]models.CreateProductRequestType, userId uuid.UUID) error {
 	if newProducts == nil || len(*newProducts) == 0 {
 		return fmt.Errorf("no products provided")
 	}
@@ -73,29 +74,44 @@ func (r *productRepo) CreateNewProduct(ctx context.Context, newProducts *[]model
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer func() {
-		// no-op if already committed
 		_ = tx.Rollback(ctx)
 	}()
 
 	const insertProduct = `
-		INSERT INTO products (
-			sku, name, category_id, unit_id,
-			vat_rate, cost_price, cost_with_vat,
-			margin_percent, selling_price,
-			re_order_level, current_stock, is_active
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-		RETURNING id
-	`
+        INSERT INTO products (
+            sku, name, category_id, unit_id,
+            vat_rate, cost_price, cost_with_vat,
+            margin_percent, selling_price,
+            re_order_level, current_stock, is_active
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        RETURNING id
+    `
 
 	const insertPriceHistory = `
-		INSERT INTO product_price_history (
-			product_id, purchase_item_id,
-			unit_cost, unit_cost_with_vat,
-			margin_percent, selling_price
-		)
-		VALUES ($1, NULL, $2, $3, $4, $5)
-	`
+        INSERT INTO product_price_history (
+            product_id, purchase_item_id,
+            unit_cost, unit_cost_with_vat,
+            margin_percent, selling_price
+        )
+        VALUES ($1, NULL, $2, $3, $4, $5)
+    `
+
+	// Skipped when opening stock is 0, because stock_movements requires qty_change <> 0.
+	const insertOpeningStock = `
+        INSERT INTO stock_movements (
+            product_id, type, qty_change, balance_after,
+            ref_type, ref_id, note, user_id
+        )
+        SELECT $1::uuid, 'opening', $2::numeric, $2::numeric,
+               NULL, NULL, 'Opening stock', $3::uuid
+        WHERE $2::numeric <> 0
+    `
+
+	var movementUser uuid.UUID
+	if userId != uuid.Nil {
+		movementUser = userId
+	}
 
 	for i, p := range *newProducts {
 		if strings.TrimSpace(p.SKU) == "" || strings.TrimSpace(p.Name) == "" {
@@ -122,14 +138,18 @@ func (r *productRepo) CreateNewProduct(ctx context.Context, newProducts *[]model
 			return fmt.Errorf("failed to insert product at index %d: %w", i, err)
 		}
 
-		// First entry of the product -> first price history record
-		_, err = tx.Exec(ctx, insertPriceHistory,
+		if _, err = tx.Exec(ctx, insertPriceHistory,
 			productID,
 			p.CostPrice, p.CostWithVat,
 			p.MarginPercent, p.SellingPrice,
-		)
-		if err != nil {
+		); err != nil {
 			return fmt.Errorf("failed to insert price history for product at index %d: %w", i, err)
+		}
+
+		if _, err = tx.Exec(ctx, insertOpeningStock,
+			productID, p.CurrentStock, movementUser,
+		); err != nil {
+			return fmt.Errorf("failed to insert opening stock for product at index %d: %w", i, err)
 		}
 	}
 

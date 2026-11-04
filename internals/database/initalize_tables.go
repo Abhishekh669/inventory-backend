@@ -142,6 +142,40 @@ var postgressSchemaOrderedTables = []struct {
 			);
 			CREATE INDEX  IF NOT EXISTS idx_price_hist_product ON product_price_history(product_id, effective_date);
 		`,
+	}, {
+		Name: "stock_movements",
+		Schema: `
+        CREATE TABLE IF NOT EXISTS stock_movements (
+            id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            product_id      UUID NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+            type            VARCHAR(20) NOT NULL
+                                CHECK (type IN (
+                                    'opening',
+                                    'purchase',
+                                    'sale',
+                                    'purchase_return',
+                                    'sale_return',
+                                    'adjustment'
+                                )),
+            qty_change      NUMERIC(14,3) NOT NULL,
+            balance_after   NUMERIC(14,3) NOT NULL,
+            ref_type        VARCHAR(30),
+            ref_id          UUID,
+            note            VARCHAR(250),
+            user_id         UUID REFERENCES users(id) ON DELETE SET NULL,
+            movement_date   DATE NOT NULL DEFAULT CURRENT_DATE,
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+            CHECK (qty_change <> 0),
+            CHECK (balance_after >= 0)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_stock_mov_product
+            ON stock_movements(product_id, movement_date);
+
+        CREATE INDEX IF NOT EXISTS idx_stock_mov_ref
+            ON stock_movements(ref_type, ref_id);
+    `,
 	},
 }
 

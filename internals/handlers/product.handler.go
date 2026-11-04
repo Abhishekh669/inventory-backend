@@ -258,6 +258,8 @@ func (h *ProductHandler) CreateProduct(c *gin.Context) {
 		return
 	}
 
+	fmt.Println("this is hte proudcts in backend : ", products)
+
 	if len(products) == 0 {
 		helpers.Error(c, http.StatusBadRequest, "at least one product is required")
 		return
@@ -289,7 +291,13 @@ func (h *ProductHandler) CreateProduct(c *gin.Context) {
 		seenSKUs[key] = i
 	}
 
-	if err := h.productService.CreateNewProduct(c.Request.Context(), &products); err != nil {
+	user, status := helpers.GetUserContext(c)
+	if !status {
+		helpers.Error(c, http.StatusBadRequest, "unauthoirzed user")
+		return
+	}
+
+	if err := h.productService.CreateNewProduct(c.Request.Context(), &products, user.UserID); err != nil {
 		handleProductError(c, err)
 		return
 	}
