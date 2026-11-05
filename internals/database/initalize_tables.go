@@ -177,6 +177,24 @@ var postgressSchemaOrderedTables = []struct {
             ON stock_movements(ref_type, ref_id);
     `,
 	},
+	{
+		Name: "suppliers",
+		Schema: `
+			 
+		CREATE TABLE IF NOT EXISTS suppliers (
+		  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		  name             VARCHAR(150) NOT NULL,
+		  contact_person   VARCHAR(100),
+		  phone            VARCHAR(30),
+		  address          VARCHAR(250),
+		  pan_no           VARCHAR(30),
+		  opening_balance  NUMERIC(14,2) NOT NULL DEFAULT 0,
+		  balance          NUMERIC(14,2) NOT NULL DEFAULT 0,   -- amount we owe supplier
+		  is_active        BOOLEAN NOT NULL DEFAULT TRUE,
+		  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
+		`,
+	},
 }
 
 func CreatePostgresTables(ctx context.Context, postgresPool *pgxpool.Pool) error {

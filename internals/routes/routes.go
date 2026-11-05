@@ -12,5 +12,5 @@ func SetUpRoutes(app *gin.Engine, appConfig *app.App) {
 	SettingServiceRouter(apiGroup, appConfig)
 	CategoryServiceRouter(apiGroup, appConfig)
 	ProductServiceRouter(apiGroup, appConfig)
-
+	SupplierServiceRouter(apiGroup, appConfig)
 }

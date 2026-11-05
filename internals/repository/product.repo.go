@@ -226,12 +226,10 @@ func (r *productRepo) DeleteNewProducts(ctx context.Context, ids []uuid.UUID) er
 	}
 
 	result, err := r.pool.Exec(ctx, `
-		UPDATE products
-		SET is_active = FALSE,
-		    updated_at = now()
+		DELETE FROM products
 		WHERE id = ANY($1::uuid[])
-		  AND is_active = TRUE
 	`, idStrings)
+
 	if err != nil {
 		return fmt.Errorf("failed to delete products: %w", err)
 	}
@@ -239,6 +237,7 @@ func (r *productRepo) DeleteNewProducts(ctx context.Context, ids []uuid.UUID) er
 	if result.RowsAffected() == 0 {
 		return ErrProductNotFound
 	}
+
 	return nil
 }
 

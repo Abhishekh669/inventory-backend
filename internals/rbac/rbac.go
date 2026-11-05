@@ -24,7 +24,9 @@ const (
 	CustomerView   Permission = "customer.view"
 	CustomerManage Permission = "customer.manage"
 	SupplierView   Permission = "supplier.view"
-	SupplierManage Permission = "supplier.manage"
+	SupplierUpdate Permission = "supplier.update"
+	SupplierDelete Permission = "supplier.delete"
+	SupplierCreate Permission = "supplier.create"
 
 	// selling
 	SaleCreate Permission = "sale.create"
@@ -60,7 +62,7 @@ var RolePermissions = map[models.RoleType][]Permission{
 
 	models.RoleManager: {
 		ProductView, ProductCreate, ProductUpdate,
-		CustomerView, CustomerManage, SupplierView, SupplierManage,
+		CustomerView, CustomerManage, SupplierView, SupplierCreate, SupplierDelete, SupplierUpdate,
 		SaleCreate, SaleView,
 		PurchaseCreate, PurchaseView, OrderManage,
 		PaymentCreate, ReturnCreate,
@@ -72,7 +74,7 @@ var RolePermissions = map[models.RoleType][]Permission{
 
 	models.RoleCashier: {
 		ProductView,
-		CustomerView, CustomerManage,
+		CustomerView, CustomerManage, SupplierView, SupplierCreate, SupplierDelete, SupplierUpdate,
 		SaleCreate, SaleView,
 		PaymentCreate,
 		StockView, DashboardView,
