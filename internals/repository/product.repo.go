@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/shopspring/decimal"
 )
 
 type ProductRepo interface {
@@ -53,6 +54,7 @@ type ProductRepo interface {
 		ctx context.Context,
 		ids []uuid.UUID,
 	) error
+	UpdateProductPrice(ctx context.Context, in *models.ProductPriceUpdate) (*models.ProductPriceResult, error)
 }
 type productRepo struct {
 	pool *pgxpool.Pool
@@ -62,7 +64,70 @@ var (
 	ErrProductNotFound       = errors.New("product not found")
 	ErrProductSKUExists      = errors.New("a product with this sku already exists")
 	ErrInvalidCategoryOrUnit = errors.New("invalid category or unit")
+	ErrProductPriceChanged   = errors.New("product price was changed by someone else, refresh and try again")
 )
+
+func (r *productRepo) UpdateProductPrice(ctx context.Context, in *models.ProductPriceUpdate) (*models.ProductPriceResult, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("update product price: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) // no-op after a successful commit
+
+	// lock the row so two people can't change the price at the same time
+	var currentCost decimal.Decimal
+	err = tx.QueryRow(ctx,
+		`SELECT cost_price FROM products WHERE id = $1 FOR UPDATE`, in.ID,
+	).Scan(&currentCost)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrProductNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("update product price: lock product: %w", err)
+	}
+
+	// the old price the user saw must still be the real current price
+	if !currentCost.Round(4).Equal(in.OldCost.Round(4)) {
+		return nil, ErrProductPriceChanged
+	}
+
+	// profit_per_unit is GENERATED, so it recalculates automatically
+	var res models.ProductPriceResult
+	err = tx.QueryRow(ctx, `
+		UPDATE products SET
+			vat_rate       = $2,
+			margin_percent = $3,
+			cost_price     = $4,
+			cost_with_vat  = $5,
+			selling_price  = $6,
+			updated_at     = now()
+		WHERE id = $1
+		RETURNING id, vat_rate, margin_percent, cost_price, cost_with_vat, selling_price, profit_per_unit`,
+		in.ID, in.VatRate, in.MarginPercent, in.CostPrice, in.CostWithVat, in.SellingPrice,
+	).Scan(
+		&res.ID, &res.VatRate, &res.MarginPercent, &res.CostPrice,
+		&res.CostWithVat, &res.SellingPrice, &res.ProfitPerUnit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("update product price: update product: %w", err)
+	}
+
+	// keep the history in step (purchase_item_id stays NULL for manual changes)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO product_price_history
+			(product_id, unit_cost, unit_cost_with_vat, margin_percent, selling_price)
+		VALUES ($1, $2, $3, $4, $5)`,
+		in.ID, in.CostPrice, in.CostWithVat, in.MarginPercent, in.SellingPrice,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("update product price: insert history: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("update product price: commit: %w", err)
+	}
+	return &res, nil
+}
 
 func (r *productRepo) CreateNewProduct(ctx context.Context, newProducts *[]models.CreateProductRequestType, userId uuid.UUID) error {
 	if newProducts == nil || len(*newProducts) == 0 {

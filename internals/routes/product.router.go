@@ -25,4 +25,5 @@ func ProductServiceRouter(router *gin.RouterGroup, app *app.App) {
 	productServiceRoute.POST("/delete-products", app.PermissionChecker.Require(rbac.ProductDelete), app.ProductHandler.DeleteProducts)
 
 	productServiceRoute.GET("/get-products/category/:slug", app.PermissionChecker.Require(rbac.ProductView), app.ProductHandler.GetProductsByCategory)
+	productServiceRoute.PUT("/update-product-price", app.PermissionChecker.Require(rbac.ProductUpdate), app.ProductHandler.UpdateProductPrice)
 }

@@ -160,3 +160,32 @@ type ProductPriceHistoryListTypeResponse struct {
 	HasMore    bool                          `json:"has_more"`
 	NextOffset int                           `json:"next_offset"`
 }
+
+type UpdateProdcutPrice struct {
+	CurrentMargin decimal.Decimal `json:"current_margin"`
+	CurrentVat    decimal.Decimal `json:"current_vat"`
+	OldPrice      decimal.Decimal `json:"old_price"`
+	NewPrice      decimal.Decimal `json:"new_price"`
+	ID            uuid.UUID       `json:"id"`
+}
+
+// calculated by the service, saved by the repository
+type ProductPriceUpdate struct {
+	ID            uuid.UUID
+	OldCost       decimal.Decimal // used to detect concurrent changes
+	VatRate       decimal.Decimal
+	MarginPercent decimal.Decimal
+	CostPrice     decimal.Decimal
+	CostWithVat   decimal.Decimal
+	SellingPrice  decimal.Decimal
+}
+
+type ProductPriceResult struct {
+	ID            uuid.UUID       `json:"id"`
+	VatRate       decimal.Decimal `json:"vat_rate"`
+	MarginPercent decimal.Decimal `json:"margin_percent"`
+	CostPrice     decimal.Decimal `json:"cost_price"`
+	CostWithVat   decimal.Decimal `json:"cost_with_vat"`
+	SellingPrice  decimal.Decimal `json:"selling_price"`
+	ProfitPerUnit decimal.Decimal `json:"profit_per_unit"`
+}

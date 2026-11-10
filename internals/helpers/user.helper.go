@@ -1,11 +1,14 @@
 package helpers
 
 import (
+	"context"
 	"fmt"
 	"inventory/internals/models"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 func StringToUUID(idStr string) (uuid.UUID, error) {
@@ -82,4 +85,20 @@ func GetUserContext(c *gin.Context) (*UserContext, bool) {
 		Email:               userEmail,
 		LastPasswordResetAt: resetAt,
 	}, true
+}
+
+func nextPONo(ctx context.Context, tx pgx.Tx, orderDate time.Time) (string, error) {
+	year := orderDate.Year()
+
+	var n int
+	err := tx.QueryRow(ctx, `
+		INSERT INTO po_counters (po_year, last_no)
+		VALUES ($1, 1)
+		ON CONFLICT (po_year) DO UPDATE SET last_no = po_counters.last_no + 1
+		RETURNING last_no`, year).Scan(&n)
+	if err != nil {
+		return "", fmt.Errorf("generate po number: %w", err)
+	}
+
+	return fmt.Sprintf("PO-%d-%04d", year, n), nil
 }

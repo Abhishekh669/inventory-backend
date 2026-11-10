@@ -30,6 +30,10 @@ type App struct {
 	SupplierService services.SupplierService
 	SupplierHandler handlers.SupplierHandler
 
+	PurchaseOrderRepo    repository.PurchaseOrderRepository
+	PurchaseOrderService services.PurchaseOrderService
+	PurchaseOrderHandler handlers.PurchaseOrderHandler
+
 	PermissionChecker authMiddleware.PermissionChecker
 }
 
@@ -61,6 +65,10 @@ func New() (*App, error) {
 	supplierService := services.NewSupplierService(supplierRepo)
 	supplierHandler := handlers.NewSupplierHandler(supplierService)
 
+	purchaseOrderRepo := repository.NewPurchaseOrderRepository()
+	purchaseOrderService := services.NewPurchaseOrderService(purchaseOrderRepo)
+	purchaseOrderHandler := handlers.NewPurchaseOrderHandler(purchaseOrderService)
+
 	return &App{
 		UserRepo:    userRepo,
 		UserService: userService,
@@ -81,6 +89,10 @@ func New() (*App, error) {
 		SupplierRepo:    supplierRepo,
 		SupplierService: supplierService,
 		SupplierHandler: *supplierHandler,
+
+		PurchaseOrderRepo:    purchaseOrderRepo,
+		PurchaseOrderService: purchaseOrderService,
+		PurchaseOrderHandler: *purchaseOrderHandler,
 
 		PermissionChecker: *checker,
 	}, nil

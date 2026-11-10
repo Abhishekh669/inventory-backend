@@ -54,6 +54,10 @@ func handleProductError(c *gin.Context, err error) {
 		helpers.Error(c, http.StatusBadRequest, "a numeric value is out of range")
 	case errors.As(err, &pgErr) && pgErr.Code == "22001":
 		helpers.Error(c, http.StatusBadRequest, "a text value is too long")
+	case errors.Is(err, repository.ErrProductNotFound):
+		helpers.Error(c, http.StatusNotFound, "product not found")
+	case errors.Is(err, services.ErrInvalidProductPrice):
+		helpers.Error(c, http.StatusBadRequest, err.Error())
 	default:
 		fmt.Println("product error:", err)
 		helpers.Error(c, http.StatusInternalServerError, "internal server error")
@@ -369,4 +373,21 @@ func (h *ProductHandler) DeleteProducts(c *gin.Context) {
 	}
 
 	helpers.Success(c, http.StatusOK, "products deleted successfully", nil)
+}
+
+func (h *ProductHandler) UpdateProductPrice(c *gin.Context) {
+	var updatePriceData models.UpdateProdcutPrice
+	if err := c.ShouldBindJSON(&updatePriceData); err != nil {
+		fmt.Println("Error binding JSON in update product price:", err)
+		helpers.Error(c, http.StatusBadRequest, "invalid payload")
+		return
+	}
+
+	result, err := h.productService.UpdateProductPrice(c.Request.Context(), &updatePriceData)
+	if err != nil {
+		handleProductError(c, err)
+		return
+	}
+
+	helpers.Success(c, http.StatusOK, "product price updated successfully", result)
 }

@@ -13,6 +13,12 @@ const (
 	CategoryUpdate Permission = "category.update"
 	CategoryDelete Permission = "category.delete"
 
+	//purchase-order
+	PurchaseOrderView   Permission = "purchase_order.view"
+	PurchaseOrderCreate Permission = "purchase_order.create"
+	PurchaseOrderUpdate Permission = "purchase_order.update"
+	PurchaseOrderDelete Permission = "purchase_order.delete"
+
 	// products
 	ProductView   Permission = "product.view"
 	ProductCreate Permission = "product.create"
@@ -69,7 +75,7 @@ var RolePermissions = map[models.RoleType][]Permission{
 		StockView, StockAdjust, ExpenseManage,
 		DashboardView, ReportView,
 		GetSetting, UpdateSetting,
-		CategoryCreate, CategoryDelete, CategoryUpdate, CategoryView,
+		CategoryCreate, CategoryDelete, CategoryUpdate, CategoryView, PurchaseCancel, PurchaseCreate, ProductUpdate, PurchaseOrderDelete,
 	},
 
 	models.RoleCashier: {

@@ -193,6 +193,57 @@ var postgressSchemaOrderedTables = []struct {
 		  is_active        BOOLEAN NOT NULL DEFAULT TRUE,
 		  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 		);
+		CREATE UNIQUE INDEX IF NOT EXISTS uq_suppliers_pan ON suppliers(pan_no) WHERE pan_no IS NOT NULL;
+		`,
+	},
+	{
+		Name: "purchase_orders",
+		Schema: `
+		CREATE TABLE IF NOT EXISTS purchase_orders (
+		  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		  po_no          VARCHAR(30) NOT NULL UNIQUE,
+		  supplier_id    UUID NOT NULL REFERENCES suppliers(id),
+		  title          VARCHAR(150),
+		  order_date     DATE NOT NULL DEFAULT CURRENT_DATE,
+		  expected_date  DATE,
+		  status         VARCHAR(15) NOT NULL DEFAULT 'draft'
+		                 CHECK (status IN ('draft','sent','partial','received','cancelled')),
+		  note           TEXT,
+		  created_by     UUID REFERENCES users(id) ON DELETE SET NULL,
+		  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+		  CHECK (expected_date IS NULL OR expected_date >= order_date)
+		);
+		CREATE INDEX IF NOT EXISTS idx_po_supplier_date ON purchase_orders(supplier_id, order_date DESC, id DESC);
+		CREATE INDEX IF NOT EXISTS idx_po_date_id       ON purchase_orders(order_date DESC, id DESC);
+		CREATE INDEX IF NOT EXISTS idx_po_status_date   ON purchase_orders(status, order_date DESC, id DESC);
+		CREATE INDEX IF NOT EXISTS idx_po_created_by    ON purchase_orders(created_by);
+
+		`,
+	},
+	{
+		Name: "purchase_order_items",
+		Schema: `
+
+		CREATE TABLE IF NOT EXISTS purchase_order_items (
+		  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		  purchase_order_id   UUID NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+		  product_id          UUID NOT NULL REFERENCES products(id),
+		  qty_ordered         NUMERIC(14,3) NOT NULL CHECK (qty_ordered > 0),
+		  qty_received        NUMERIC(14,3) NOT NULL DEFAULT 0 CHECK (qty_received >= 0),
+		  expected_unit_cost  NUMERIC(14,4) CHECK (expected_unit_cost IS NULL OR expected_unit_cost >= 0),
+		  UNIQUE (purchase_order_id, product_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_poi_product ON purchase_order_items(product_id);
+
+		`,
+	},
+	{
+		Name: "purchase_order_counter",
+		Schema: `
+		CREATE TABLE IF NOT EXISTS po_counters (
+		  po_year  INT PRIMARY KEY,
+		  last_no  INT NOT NULL
+		);
 		`,
 	},
 }
