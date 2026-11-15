@@ -7,6 +7,8 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+//purchase order
+
 type PurchaseOrderStatus string
 
 const (
@@ -20,6 +22,7 @@ const (
 type PurchaseOrder struct {
 	ID           uuid.UUID           `json:"id" db:"id"`
 	PONo         string              `json:"po_no" db:"po_no"`
+	PurchaseID   *uuid.UUID          `json:"purchase_id" db:"purchase_id"`
 	SupplierID   uuid.UUID           `json:"supplier_id" db:"supplier_id"`
 	Title        *string             `json:"title" db:"title"`
 	OrderDate    time.Time           `json:"order_date" db:"order_date"`
@@ -62,6 +65,7 @@ type CreatePurchaseOrder struct {
 type PurchaseOrderSummary struct {
 	ID            uuid.UUID           `json:"id"`
 	PONo          string              `json:"po_no"`
+	PurchaseID    *uuid.UUID          `json:"purchase_id" db:"purchase_id"`
 	Title         *string             `json:"title"`
 	Status        PurchaseOrderStatus `json:"status"`
 	Note          *string             `json:"note"`

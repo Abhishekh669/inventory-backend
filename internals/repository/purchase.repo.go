@@ -4,43 +4,36 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"inventory/internals/database"
+	"inventory/internals/models"
 	"log"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"inventory/internals/database"
-	"inventory/internals/models"
+	"github.com/shopspring/decimal"
 )
 
-type PurchaseOrderRepository interface {
-	// GetBySupplier returns up to Limit+1 rows (the extra row tells the service
-	// there is another page) and the total number of orders matching the filters.
-	GetBySupplier(ctx context.Context, f models.PurchaseOrderListFilter) ([]models.PurchaseOrderSummary, int, error)
-	GetItems(ctx context.Context, purchaseOrderID uuid.UUID) ([]models.PurchaseOrderItemDetail, error)
-	GetByID(ctx context.Context, id uuid.UUID) (*models.PurchaseOrderDetail, error)
-	Create(ctx context.Context, in models.PurchaseOrderWrite, createdBy uuid.UUID) (uuid.UUID, error)
-	Update(ctx context.Context, id uuid.UUID, in models.PurchaseOrderWrite) error
-	Delete(ctx context.Context, ids []uuid.UUID) error
+type PurchaseRepository interface {
+	GetAllPurchase(ctx context.Context, f models.PurchaseListFilter) ([]models.PurchaseListItem, int, error)
+
+	CreatePurchase(ctx context.Context, userID uuid.UUID, calc *models.PurchaseCalc) (uuid.UUID, error)
 }
 
-type purchaseOrderRepository struct {
+type purchaseRepository struct {
 	pool *pgxpool.Pool
 }
 
-var (
-	ErrPurchaseOrderNotFound        = errors.New("purchase order not found")
-	ErrPurchaseOrderItemNotFound    = errors.New("purchase order item not found")
-	ErrPurchaseOrderLocked          = errors.New("purchase order can't be changed in its current status")
-	ErrPurchaseOrderProductNotFound = errors.New("one or more products do not exist")
-	ErrPurchaseOrderQuantity        = errors.New("quantity must be a whole number for products sold in whole units")
-	ErrPurchaseOrderItemProduct     = errors.New("the product of an existing item can't be changed")
-)
+func parseDec(s string) (decimal.Decimal, error) {
+	return decimal.NewFromString(s)
+}
 
-func NewPurchaseOrderRepository() PurchaseOrderRepository {
+//TODO: wile creating add pruchaseid in purchase roder and while deiing pruchasdeleteforthe prucase order too
+
+func NewPurchaseRepository() PurchaseRepository {
 
 	pool, err := database.GetPostgresPool()
 	if err != nil {
@@ -48,471 +41,490 @@ func NewPurchaseOrderRepository() PurchaseOrderRepository {
 		return nil
 	}
 
-	return &purchaseOrderRepository{pool: pool}
+	return &purchaseRepository{pool: pool}
 }
 
-var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+func (r *purchaseRepository) GetAllPurchase(ctx context.Context, f models.PurchaseListFilter) ([]models.PurchaseListItem, int, error) {
+	conds := []string{"po.status <> 'draft'"}
+	args := []any{}
 
-func escapeLike(s string) string { return likeEscaper.Replace(s) }
-
-func (r *purchaseOrderRepository) GetBySupplier(
-	ctx context.Context,
-	f models.PurchaseOrderListFilter,
-) ([]models.PurchaseOrderSummary, int, error) {
-	conds := []string{"po.supplier_id = $1"}
-	args := []any{f.SupplierID}
-
-	if f.Status != nil {
-		args = append(args, string(*f.Status))
+	if f.PurchaseOrderStatus != nil {
+		args = append(args, string(*f.PurchaseOrderStatus))
 		conds = append(conds, fmt.Sprintf("po.status = $%d", len(args)))
 	}
+
+	if f.PurchaseOrderNumber != nil {
+		args = append(args, "%"+escapeLike(*f.PurchaseOrderNumber)+"%")
+		conds = append(conds, fmt.Sprintf("po.po_no ILIKE $%d", len(args)))
+	}
+
+	// Filtering on purchase fields hides POs that have no purchase.
+	if f.PurchaseStatus != nil {
+		args = append(args, string(*f.PurchaseStatus))
+		conds = append(conds, fmt.Sprintf("p.status = $%d", len(args)))
+	}
+
+	if f.PaymentStatus != nil {
+		args = append(args, string(*f.PaymentStatus))
+		conds = append(conds, fmt.Sprintf("p.payment_status = $%d", len(args)))
+	}
+
 	if f.Search != nil {
 		args = append(args, "%"+escapeLike(*f.Search)+"%")
-		conds = append(conds, fmt.Sprintf("(po.title ILIKE $%d OR po.note ILIKE $%d)", len(args), len(args)))
+		ph := fmt.Sprintf("$%d", len(args))
+
+		conds = append(conds, fmt.Sprintf(
+			"(po.po_no ILIKE %[1]s OR po.title ILIKE %[1]s OR p.supplier_bill_no ILIKE %[1]s)",
+			ph,
+		))
 	}
 
 	if f.FromDate != nil {
 		args = append(args, *f.FromDate)
 		conds = append(conds, fmt.Sprintf("po.created_at >= $%d", len(args)))
 	}
+
 	if f.ToDate != nil {
 		args = append(args, *f.ToDate)
 		conds = append(conds, fmt.Sprintf("po.created_at < $%d", len(args)))
 	}
+
 	filterSQL := strings.Join(conds, " AND ")
 
-	// total ignores the cursor so it stays the same on every page
+	// PO is the main row. The purchase is optional, and the lateral join
+	// picks at most ONE purchase per PO so rows are never duplicated.
+	const fromSQL = `
+		FROM purchase_orders po
+		JOIN suppliers s ON s.id = po.supplier_id
+		LEFT JOIN users u ON u.id = po.created_by
+		LEFT JOIN LATERAL (
+			SELECT *
+			FROM purchases
+			WHERE purchase_order_id = po.id
+			ORDER BY created_at DESC, id DESC
+			LIMIT 1
+		) p ON TRUE
+	`
+
+	// Count ignores cursor so total stays consistent across pages.
 	var total int
-	if err := r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM purchase_orders po WHERE "+filterSQL, args...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("count purchase orders: %w", err)
+	if err := r.pool.QueryRow(
+		ctx,
+		"SELECT COUNT(*) "+fromSQL+" WHERE "+filterSQL,
+		args...,
+	).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count purchase list: %w", err)
 	}
+
 	if total == 0 {
-		return []models.PurchaseOrderSummary{}, 0, nil
+		return []models.PurchaseListItem{}, 0, nil
 	}
 
 	listSQL := filterSQL
 	listArgs := append([]any{}, args...)
+
 	if f.Cursor != nil {
 		listArgs = append(listArgs, f.Cursor.CreatedAt, f.Cursor.ID)
-		listSQL += fmt.Sprintf(" AND (po.created_at, po.id) < ($%d, $%d)", len(listArgs)-1, len(listArgs))
+		listSQL += fmt.Sprintf(
+			" AND (po.created_at, po.id) < ($%d, $%d)",
+			len(listArgs)-1,
+			len(listArgs),
+		)
 	}
+
 	listArgs = append(listArgs, f.Limit+1)
 
 	query := fmt.Sprintf(`
-		SELECT po.id, po.po_no, po.title, po.status, po.note,
-		       po.created_by, u.name, po.created_at
-		FROM purchase_orders po
-		LEFT JOIN users u ON u.id = po.created_by
+		SELECT
+			po.id,
+			po.po_no,
+			po.supplier_id,
+			s.name,
+			u.name,
+			po.created_at,
+			po.status,
+			po.title,
+
+			p.id,
+			p.supplier_bill_no,
+			p.purchase_date,
+			p.total,
+			p.paid_amount,
+			p.returned_amount,
+			p.due_amount,
+			p.status,
+			p.payment_status,
+			p.created_at,
+			p.note
+		%s
 		WHERE %s
 		ORDER BY po.created_at DESC, po.id DESC
-		LIMIT $%d`, listSQL, len(listArgs))
+		LIMIT $%d
+	`, fromSQL, listSQL, len(listArgs))
 
 	rows, err := r.pool.Query(ctx, query, listArgs...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("query purchase orders: %w", err)
+		return nil, 0, fmt.Errorf("query purchase list: %w", err)
 	}
 	defer rows.Close()
 
-	orders := make([]models.PurchaseOrderSummary, 0, f.Limit+1)
+	items := make([]models.PurchaseListItem, 0, f.Limit+1)
+
 	for rows.Next() {
 		var (
-			po     models.PurchaseOrderSummary
-			status string
+			po       models.PurchaseOrderData
+			poStatus string
+
+			// purchase columns are all NULL when the PO has no purchase
+			pID            *uuid.UUID
+			pBillNo        *string
+			pDate          *time.Time
+			pTotal         decimal.NullDecimal
+			pPaid          decimal.NullDecimal
+			pReturned      decimal.NullDecimal
+			pDue           decimal.NullDecimal
+			pStatus        *string
+			pPaymentStatus *string
+			pCreatedAt     *time.Time
+			pNote          *string
 		)
+
 		if err := rows.Scan(
-			&po.ID, &po.PONo, &po.Title, &status, &po.Note,
-			&po.CreatedBy, &po.CreatedByName, &po.CreatedAt,
+			&po.PurchaseOrderID,
+			&po.PurchaseOrderNumber,
+			&po.SupplierID,
+			&po.SupplierName,
+			&po.PurchaseOrderByName,
+			&po.PurchaseOrderedAt,
+			&poStatus,
+			&po.PurchaseOrderTitle,
+
+			&pID,
+			&pBillNo,
+			&pDate,
+			&pTotal,
+			&pPaid,
+			&pReturned,
+			&pDue,
+			&pStatus,
+			&pPaymentStatus,
+			&pCreatedAt,
+			&pNote,
 		); err != nil {
-			return nil, 0, fmt.Errorf("scan purchase order: %w", err)
+			return nil, 0, fmt.Errorf("scan purchase list: %w", err)
 		}
-		po.Status = models.PurchaseOrderStatus(status)
-		orders = append(orders, po)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("read purchase orders: %w", err)
-	}
 
-	return orders, total, nil
-}
+		po.PurchaseOrderStatus = models.PurchaseOrderStatus(poStatus)
+		item := models.PurchaseListItem{PurchaseOrderData: po}
 
-func (r *purchaseOrderRepository) GetItems(
-	ctx context.Context,
-	purchaseOrderID uuid.UUID,
-) ([]models.PurchaseOrderItemDetail, error) {
-	rows, err := r.pool.Query(ctx, `
-		SELECT i.id, i.product_id, p.name, p.sku, un.name, un.allow_decimal,
-		       i.qty_ordered, i.qty_received, i.expected_unit_cost,
-		       i.expected_unit_cost * i.qty_ordered
-		FROM purchase_order_items i
-		JOIN products p ON p.id = i.product_id
-		JOIN units un   ON un.id = p.unit_id
-		WHERE i.purchase_order_id = $1
-		ORDER BY p.name, i.id`, purchaseOrderID)
-	if err != nil {
-		return nil, fmt.Errorf("query purchase order items: %w", err)
-	}
-	defer rows.Close()
-
-	items := make([]models.PurchaseOrderItemDetail, 0)
-	for rows.Next() {
-		var it models.PurchaseOrderItemDetail
-		if err := rows.Scan(
-			&it.ID, &it.ProductID, &it.ProductName, &it.ProductSKU, &it.UnitName, &it.AllowDecimal,
-			&it.QtyOrdered, &it.QtyReceived, &it.ExpectedUnitCost, &it.LineTotal,
-		); err != nil {
-			return nil, fmt.Errorf("scan purchase order item: %w", err)
-		}
-		items = append(items, it)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read purchase order items: %w", err)
-	}
-
-	return items, nil
-}
-
-func (r *purchaseOrderRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.PurchaseOrderDetail, error) {
-	var (
-		po     models.PurchaseOrderDetail
-		status string
-	)
-
-	err := r.pool.QueryRow(ctx, `
-		SELECT po.id, po.po_no, po.supplier_id, po.title,
-		       po.order_date::text, po.expected_date::text,
-		       po.status, po.note, po.created_by, u.name, po.created_at
-		FROM purchase_orders po
-		LEFT JOIN users u ON u.id = po.created_by
-		WHERE po.id = $1`, id,
-	).Scan(
-		&po.ID, &po.PONo, &po.SupplierID, &po.Title,
-		&po.OrderDate, &po.ExpectedDate,
-		&status, &po.Note, &po.CreatedBy, &po.CreatedByName, &po.CreatedAt,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrPurchaseOrderNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get purchase order: %w", err)
-	}
-	po.Status = models.PurchaseOrderStatus(status)
-
-	items, err := r.GetItems(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	po.Items = items
-
-	return &po, nil
-}
-
-// ---------- writes ----------
-
-func (r *purchaseOrderRepository) Create(
-	ctx context.Context,
-	in models.PurchaseOrderWrite,
-	createdBy uuid.UUID,
-) (uuid.UUID, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("begin create purchase order: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	if err := validatePurchaseOrderItems(ctx, tx, in.Items); err != nil {
-		return uuid.Nil, err
-	}
-
-	// the number is generated in the same transaction, so a rollback gives it back
-	poNo, err := nextPONo(ctx, tx, in.OrderDate)
-	if err != nil {
-		return uuid.Nil, err
-	}
-
-	status := models.PurchaseOrderDraft
-	if in.Status != nil {
-		status = *in.Status
-	}
-
-	var id uuid.UUID
-	err = tx.QueryRow(ctx, `
-		INSERT INTO purchase_orders
-			(po_no, supplier_id, title, order_date, expected_date, status, note, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id`,
-		poNo, in.SupplierID, in.Title, in.OrderDate, in.ExpectedDate, string(status), in.Note, createdBy,
-	).Scan(&id)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("insert purchase order: %w", err)
-	}
-
-	for _, item := range in.Items {
-		if err := insertPurchaseOrderItem(ctx, tx, id, item); err != nil {
-			return uuid.Nil, err
-		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return uuid.Nil, fmt.Errorf("commit create purchase order: %w", err)
-	}
-
-	return id, nil
-}
-
-func (r *purchaseOrderRepository) Update(ctx context.Context, id uuid.UUID, in models.PurchaseOrderWrite) error {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin update purchase order: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	// lock the row so two edits (or an edit and a delete) can't run at the same time
-	var current string
-	err = tx.QueryRow(ctx, `SELECT status FROM purchase_orders WHERE id = $1 FOR UPDATE`, id).Scan(&current)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrPurchaseOrderNotFound
-	}
-	if err != nil {
-		return fmt.Errorf("lock purchase order: %w", err)
-	}
-	if !isEditablePurchaseOrderStatus(current) {
-		return ErrPurchaseOrderLocked
-	}
-
-	if err := validatePurchaseOrderItems(ctx, tx, in.Items); err != nil {
-		return err
-	}
-
-	var status *string
-	if in.Status != nil {
-		s := string(*in.Status)
-		status = &s
-	}
-
-	if _, err := tx.Exec(ctx, `
-		UPDATE purchase_orders
-		SET title = $2, order_date = $3, expected_date = $4,
-		    status = COALESCE($5, status), note = $6
-		WHERE id = $1`,
-		id, in.Title, in.OrderDate, in.ExpectedDate, status, in.Note,
-	); err != nil {
-		return fmt.Errorf("update purchase order: %w", err)
-	}
-
-	// existing lines: item id -> product id
-	existing := make(map[uuid.UUID]uuid.UUID)
-	rows, err := tx.Query(ctx, `SELECT id, product_id FROM purchase_order_items WHERE purchase_order_id = $1`, id)
-	if err != nil {
-		return fmt.Errorf("query existing items: %w", err)
-	}
-	for rows.Next() {
-		var itemID, productID uuid.UUID
-		if err := rows.Scan(&itemID, &productID); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan existing item: %w", err)
-		}
-		existing[itemID] = productID
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("read existing items: %w", err)
-	}
-
-	kept := make(map[uuid.UUID]bool, len(in.Items))
-	for _, item := range in.Items {
-		if item.ID == nil {
-			continue
-		}
-		productID, ok := existing[*item.ID]
-		if !ok {
-			return ErrPurchaseOrderItemNotFound
-		}
-		if productID != item.ProductID {
-			return ErrPurchaseOrderItemProduct
-		}
-		kept[*item.ID] = true
-	}
-
-	// 1. delete the lines that were removed (before inserts, so a product can be re-added)
-	for itemID := range existing {
-		if kept[itemID] {
-			continue
-		}
-		if _, err := tx.Exec(ctx, `DELETE FROM purchase_order_items WHERE id = $1 AND purchase_order_id = $2`, itemID, id); err != nil {
-			return fmt.Errorf("delete purchase order item: %w", err)
-		}
-	}
-
-	// 2. update the kept lines and insert the new ones
-	for _, item := range in.Items {
-		if item.ID == nil {
-			if err := insertPurchaseOrderItem(ctx, tx, id, item); err != nil {
-				return err
+		if pID != nil {
+			pd := &models.PurchaseData{
+				PurchaseID:     *pID,
+				Total:          pTotal.Decimal,
+				PaidAmount:     pPaid.Decimal,
+				ReturnedAmount: pReturned.Decimal,
+				DueAmount:      pDue.Decimal, // zero value if NULL
+				PurchaseNote:   pNote,
 			}
-			continue
+			if pBillNo != nil {
+				pd.SupplierBillNo = *pBillNo
+			}
+			if pDate != nil {
+				pd.PurchaseDate = *pDate
+			}
+			if pStatus != nil {
+				pd.PurchaseStatus = models.PurchaseStatus(*pStatus)
+			}
+			if pPaymentStatus != nil {
+				pd.PaymentStatus = models.PaymentStatus(*pPaymentStatus)
+			}
+			if pCreatedAt != nil {
+				pd.PurchaseCreatedAt = *pCreatedAt
+			}
+			item.PurchaseData = pd
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE purchase_order_items
-			SET qty_ordered = $3, expected_unit_cost = $4
-			WHERE id = $1 AND purchase_order_id = $2`,
-			*item.ID, id, item.QtyOrdered, item.ExpectedUnitCost,
-		); err != nil {
-			return fmt.Errorf("update purchase order item: %w", err)
-		}
+
+		items = append(items, item)
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit update purchase order: %w", err)
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("read purchase list: %w", err)
 	}
 
-	return nil
+	return items, total, nil
 }
 
-func (r *purchaseOrderRepository) Delete(ctx context.Context, ids []uuid.UUID) error {
+func (r *purchaseRepository) CreatePurchase(ctx context.Context, userID uuid.UUID, calc *models.PurchaseCalc) (uuid.UUID, error) {
+	req := calc.Req
+	bad := models.NewValidationError
+	hundred := decimal.NewFromInt(100)
+	one := decimal.NewFromInt(1)
+
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("begin delete purchase orders: %w", err)
+		return uuid.Nil, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	idStrings := uuidStrings(ids)
+	// 1. lock the purchase order; it must be 'sent' and not already purchased
+	var supplierID uuid.UUID
+	var poStatus string
+	var linkedPurchase *uuid.UUID
 
-	rows, err := tx.Query(ctx, `SELECT status FROM purchase_orders WHERE id = ANY($1::uuid[]) FOR UPDATE`, idStrings)
+	err = tx.QueryRow(ctx,
+		`SELECT supplier_id, status, purchase_id FROM purchase_orders WHERE id = $1 FOR UPDATE`,
+		req.PurchaseOrderID,
+	).Scan(&supplierID, &poStatus, &linkedPurchase)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, bad("purchase order not found")
+	}
 	if err != nil {
-		return fmt.Errorf("lock purchase orders: %w", err)
+		return uuid.Nil, fmt.Errorf("load purchase order: %w", err)
 	}
-	found := 0
-	locked := false
-	for rows.Next() {
-		var status string
-		if err := rows.Scan(&status); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan purchase order status: %w", err)
-		}
-		found++
-		if !isDeletablePurchaseOrderStatus(status) {
-			locked = true
-		}
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("read purchase order status: %w", err)
+	if poStatus != string(models.PurchaseOrderSent) || linkedPurchase != nil {
+		return uuid.Nil, bad("a purchase can only be created from a purchase order with status 'sent'")
 	}
 
-	if found != len(ids) {
-		return ErrPurchaseOrderNotFound
-	}
-	if locked {
-		return ErrPurchaseOrderLocked
-	}
-
-	// the items are removed by ON DELETE CASCADE
-	if _, err := tx.Exec(ctx, `DELETE FROM purchase_orders WHERE id = ANY($1::uuid[])`, idStrings); err != nil {
-		return fmt.Errorf("delete purchase orders: %w", err)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit delete purchase orders: %w", err)
-	}
-
-	return nil
-}
-
-// ---------- helpers ----------
-
-// only orders that nothing was received against can be edited
-func isEditablePurchaseOrderStatus(status string) bool {
-	return status == string(models.PurchaseOrderDraft) || status == string(models.PurchaseOrderSent)
-}
-
-func isDeletablePurchaseOrderStatus(status string) bool {
-	return status == string(models.PurchaseOrderDraft) || status == string(models.PurchaseOrderCancelled)
-}
-
-func uuidStrings(ids []uuid.UUID) []string {
-	out := make([]string, len(ids))
-	for i, id := range ids {
-		out[i] = id.String()
-	}
-	return out
-}
-
-// validatePurchaseOrderItems checks that every product exists and that the quantity
-// is a whole number when the product's unit does not allow decimals.
-func validatePurchaseOrderItems(ctx context.Context, tx pgx.Tx, items []models.PurchaseOrderItemWrite) error {
-	productIDs := make([]string, len(items))
-	for i, item := range items {
-		productIDs[i] = item.ProductID.String()
-	}
-
-	rows, err := tx.Query(ctx, `
-		SELECT p.id, un.allow_decimal
-		FROM products p
-		JOIN units un ON un.id = p.unit_id
-		WHERE p.id = ANY($1::uuid[])`, productIDs)
+	// 2. purchase header
+	var purchaseID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		INSERT INTO purchases (
+			supplier_id, purchase_order_id, supplier_bill_no, purchase_date,
+			excise_duty, special_discount, discount, vat_rate, freight_charge,
+			gross_amount, taxable_amount, vat_amount, total, paid_amount,
+			payment_status, due_date, status, note, created_by
+		) VALUES (
+			$1, $2, $3, $4::date,
+			$5::numeric, $6::numeric, $7::numeric, $8::numeric, $9::numeric,
+			$10::numeric, $11::numeric, $12::numeric, $13::numeric, $14::numeric,
+			$15, $16::date, $17, $18, $19
+		) RETURNING id`,
+		supplierID, req.PurchaseOrderID, req.SupplierBillNo, req.PurchaseDate,
+		req.ExciseDuty.String(), req.SpecialDiscount.String(), req.Discount.String(),
+		req.VatRate.String(), req.FreightCharge.String(),
+		calc.GrossAmount.String(), calc.TaxableAmount.String(), calc.VatAmount.String(),
+		calc.Total.String(), req.PaidAmount.String(),
+		string(calc.PaymentStatus), req.DueDate, string(models.PurchasePosted), req.Note, userID,
+	).Scan(&purchaseID)
 	if err != nil {
-		return fmt.Errorf("query products: %w", err)
-	}
-	defer rows.Close()
-
-	allowDecimal := make(map[uuid.UUID]bool, len(items))
-	for rows.Next() {
-		var (
-			id      uuid.UUID
-			allowed bool
-		)
-		if err := rows.Scan(&id, &allowed); err != nil {
-			return fmt.Errorf("scan product: %w", err)
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return uuid.Nil, bad("this supplier already has a purchase with that bill number")
 		}
-		allowDecimal[id] = allowed
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("read products: %w", err)
+		return uuid.Nil, fmt.Errorf("insert purchase: %w", err)
 	}
 
-	for _, item := range items {
-		allowed, ok := allowDecimal[item.ProductID]
-		if !ok {
-			return ErrPurchaseOrderProductNotFound
+	// 3. items: purchase_items, PO received qty (PO lines only), stock, movement, price update.
+	// The quantity is what the supplier actually sent: it may be more or less than ordered.
+	for _, it := range calc.Items {
+		var expected *decimal.Decimal // PO expected cost, when the line has one
+
+		if it.PurchaseOrderItemID != nil {
+			var poiProduct uuid.UUID
+			var expectedS *string
+
+			err = tx.QueryRow(ctx, `
+				SELECT product_id, expected_unit_cost::text
+				FROM purchase_order_items
+				WHERE id = $1 AND purchase_order_id = $2
+				FOR UPDATE`,
+				*it.PurchaseOrderItemID, req.PurchaseOrderID,
+			).Scan(&poiProduct, &expectedS)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return uuid.Nil, bad("an item does not belong to this purchase order")
+			}
+			if err != nil {
+				return uuid.Nil, fmt.Errorf("load purchase order item: %w", err)
+			}
+			if poiProduct != it.ProductID {
+				return uuid.Nil, bad("product does not match the purchase order item")
+			}
+			if expectedS != nil {
+				var e decimal.Decimal
+				if e, err = parseDec(*expectedS); err != nil {
+					return uuid.Nil, fmt.Errorf("parse expected_unit_cost: %w", err)
+				}
+				expected = &e
+			}
 		}
-		if !allowed && !item.QtyOrdered.Equal(item.QtyOrdered.Truncate(0)) {
-			return ErrPurchaseOrderQuantity
+
+		// lock the product (and read its unit) so concurrent sales/purchases cannot corrupt stock
+		var stockS, vatS, costS, marginS string
+		var allowDecimal bool
+		err = tx.QueryRow(ctx, `
+			SELECT p.current_stock::text, p.vat_rate::text, p.cost_price::text,
+			       p.margin_percent::text, u.allow_decimal
+			FROM products p
+			JOIN units u ON u.id = p.unit_id
+			WHERE p.id = $1
+			FOR UPDATE OF p`,
+			it.ProductID,
+		).Scan(&stockS, &vatS, &costS, &marginS, &allowDecimal)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, bad("product not found")
+		}
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("load product: %w", err)
+		}
+		if !allowDecimal && !it.Qty.IsInteger() {
+			return uuid.Nil, bad("quantity must be a whole number for this product's unit")
+		}
+
+		stock, err1 := parseDec(stockS)
+		productVat, err2 := parseDec(vatS)
+		currentCost, err3 := parseDec(costS)
+		margin, err4 := parseDec(marginS)
+		if err := errors.Join(err1, err2, err3, err4); err != nil {
+			return uuid.Nil, fmt.Errorf("parse product values: %w", err)
+		}
+
+		// purchase item row (matches the slim purchase_items table)
+		var purchaseItemID uuid.UUID
+		err = tx.QueryRow(ctx, `
+			INSERT INTO purchase_items (
+				purchase_id, product_id, poi_id, qty, rate,
+				vat_amount, unit_cost, unit_cost_with_vat
+			) VALUES (
+				$1, $2, $3, $4::numeric, $5::numeric,
+				$6::numeric, $7::numeric, $8::numeric
+			) RETURNING id`,
+			purchaseID, it.ProductID, it.PurchaseOrderItemID, it.Qty.String(), it.Rate.String(),
+			it.VatAmount.String(), it.UnitCost.String(), it.UnitCostWithVat.String(),
+		).Scan(&purchaseItemID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("insert purchase item: %w", err)
+		}
+
+		if it.PurchaseOrderItemID != nil {
+			if _, err = tx.Exec(ctx,
+				`UPDATE purchase_order_items SET qty_received = qty_received + $2::numeric WHERE id = $1`,
+				*it.PurchaseOrderItemID, it.Qty.String(),
+			); err != nil {
+				return uuid.Nil, fmt.Errorf("update received qty: %w", err)
+			}
+		}
+
+		newStock := stock.Add(it.Qty)
+
+		// price changed = rate differs from the PO expected cost;
+		// no expected cost (added product, or blank on the PO): compare with the product's current cost
+		var priceChanged bool
+		if expected != nil {
+			priceChanged = !it.Rate.Equal(*expected)
+		} else {
+			priceChanged = !it.Rate.Equal(currentCost)
+		}
+
+		if priceChanged {
+			newCost := it.Rate
+			newCostWithVat := newCost.Mul(one.Add(productVat.Div(hundred))).Round(4)
+			newSelling := newCostWithVat.Mul(one.Add(margin.Div(hundred))).Round(2)
+
+			if _, err = tx.Exec(ctx, `
+				UPDATE products
+				SET current_stock = $2::numeric, cost_price = $3::numeric, cost_with_vat = $4::numeric,
+				    selling_price = $5::numeric, updated_at = now()
+				WHERE id = $1`,
+				it.ProductID, newStock.String(), newCost.String(), newCostWithVat.String(), newSelling.String(),
+			); err != nil {
+				return uuid.Nil, fmt.Errorf("update product stock and price: %w", err)
+			}
+
+			if _, err = tx.Exec(ctx, `
+				INSERT INTO product_price_history (
+					product_id, purchase_item_id, unit_cost, unit_cost_with_vat,
+					margin_percent, selling_price, effective_date
+				) VALUES ($1, $2, $3::numeric, $4::numeric, $5::numeric, $6::numeric, $7::date)`,
+				it.ProductID, purchaseItemID, newCost.String(), newCostWithVat.String(),
+				margin.String(), newSelling.String(), req.PurchaseDate,
+			); err != nil {
+				return uuid.Nil, fmt.Errorf("insert price history: %w", err)
+			}
+		} else {
+			if _, err = tx.Exec(ctx,
+				`UPDATE products SET current_stock = $2::numeric, updated_at = now() WHERE id = $1`,
+				it.ProductID, newStock.String(),
+			); err != nil {
+				return uuid.Nil, fmt.Errorf("update product stock: %w", err)
+			}
+		}
+
+		if _, err = tx.Exec(ctx, `
+			INSERT INTO stock_movements (
+				product_id, type, qty_change, balance_after, ref_type, ref_id, note, user_id, movement_date
+			) VALUES ($1, 'purchase', $2::numeric, $3::numeric, 'purchase', $4, $5, $6, $7::date)`,
+			it.ProductID, it.Qty.String(), newStock.String(), purchaseID,
+			"Purchase bill "+req.SupplierBillNo, userID, req.PurchaseDate,
+		); err != nil {
+			return uuid.Nil, fmt.Errorf("insert stock movement: %w", err)
 		}
 	}
 
-	return nil
-}
-
-func insertPurchaseOrderItem(
-	ctx context.Context,
-	tx pgx.Tx,
-	purchaseOrderID uuid.UUID,
-	item models.PurchaseOrderItemWrite,
-) error {
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO purchase_order_items (purchase_order_id, product_id, qty_ordered, expected_unit_cost)
-		VALUES ($1, $2, $3, $4)`,
-		purchaseOrderID, item.ProductID, item.QtyOrdered, item.ExpectedUnitCost,
+	// 4. purchase order status + link to the purchase:
+	// 'received' only when every ordered line arrived in full, otherwise 'partial'
+	var allReceived bool
+	if err = tx.QueryRow(ctx, `
+		SELECT COALESCE(bool_and(qty_received >= qty_ordered), false)
+		FROM purchase_order_items WHERE purchase_order_id = $1`,
+		req.PurchaseOrderID,
+	).Scan(&allReceived); err != nil {
+		return uuid.Nil, fmt.Errorf("check order completion: %w", err)
+	}
+	newPOStatus := models.PurchaseOrderPartial
+	if allReceived {
+		newPOStatus = models.PurchaseOrderReceived
+	}
+	if _, err = tx.Exec(ctx,
+		`UPDATE purchase_orders SET status = $2, purchase_id = $3 WHERE id = $1`,
+		req.PurchaseOrderID, string(newPOStatus), purchaseID,
 	); err != nil {
-		return fmt.Errorf("insert purchase order item: %w", err)
-	}
-	return nil
-}
-
-// nextPONo returns the next number like PO-2026-0001. It must run inside the same
-// transaction that inserts the purchase order.
-func nextPONo(ctx context.Context, tx pgx.Tx, orderDate time.Time) (string, error) {
-	year := orderDate.Year()
-
-	var n int
-	err := tx.QueryRow(ctx, `
-		INSERT INTO po_counters (po_year, last_no)
-		VALUES ($1, 1)
-		ON CONFLICT (po_year) DO UPDATE SET last_no = po_counters.last_no + 1
-		RETURNING last_no`, year).Scan(&n)
-	if err != nil {
-		return "", fmt.Errorf("generate po number: %w", err)
+		return uuid.Nil, fmt.Errorf("update purchase order: %w", err)
 	}
 
-	return fmt.Sprintf("PO-%d-%04d", year, n), nil
+	// 5. payment made together with the purchase
+	if req.PaidAmount.IsPositive() {
+		var paymentID uuid.UUID
+		err = tx.QueryRow(ctx, `
+			INSERT INTO supplier_payments (
+				supplier_id, amount, payment_date, payment_method, payment_type, note, created_by
+			) VALUES ($1, $2::numeric, $3::date, $4, 'regular', $5, $6)
+			RETURNING id`,
+			supplierID, req.PaidAmount.String(), req.PurchaseDate, string(req.PaymentMethod),
+			"Payment for purchase bill "+req.SupplierBillNo, userID,
+		).Scan(&paymentID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("insert supplier payment: %w", err)
+		}
+		if _, err = tx.Exec(ctx, `
+			INSERT INTO purchase_payment_allocations (supplier_payment_id, purchase_id, amount)
+			VALUES ($1, $2, $3::numeric)`,
+			paymentID, purchaseID, req.PaidAmount.String(),
+		); err != nil {
+			return uuid.Nil, fmt.Errorf("insert payment allocation: %w", err)
+		}
+	}
+
+	// 6. supplier balance (what we owe) and summary
+	if _, err = tx.Exec(ctx,
+		`UPDATE suppliers SET balance = balance + $2::numeric WHERE id = $1`,
+		supplierID, calc.Total.Sub(req.PaidAmount).String(),
+	); err != nil {
+		return uuid.Nil, fmt.Errorf("update supplier balance: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO supplier_financial_summaries (supplier_id, total_purchases, total_payments)
+		VALUES ($1, $2::numeric, $3::numeric)
+		ON CONFLICT (supplier_id) DO UPDATE SET
+			total_purchases = supplier_financial_summaries.total_purchases + EXCLUDED.total_purchases,
+			total_payments  = supplier_financial_summaries.total_payments  + EXCLUDED.total_payments,
+			updated_at = now()`,
+		supplierID, calc.Total.String(), req.PaidAmount.String(),
+	); err != nil {
+		return uuid.Nil, fmt.Errorf("update supplier summary: %w", err)
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("commit: %w", err)
+	}
+	return purchaseID, nil
 }

@@ -16,6 +16,7 @@ type Supplier struct {
 	PanNo          *string         `db:"pan_no" json:"pan_no"`
 	OpeningBalance decimal.Decimal `db:"opening_balance" json:"opening_balance"`
 	Balance        decimal.Decimal `db:"balance" json:"balance"`
+	CreditBalance  decimal.Decimal `db:"credit_balance" json:"credit_balance"`
 	IsActive       bool            `db:"is_active" json:"is_active"`
 	CreatedAt      time.Time       `db:"created_at" json:"created_at"`
 }
@@ -26,6 +27,7 @@ type CreateSupplierInput struct {
 	Address        *string         `json:"address"`
 	PanNo          *string         `json:"pan_no"`
 	OpeningBalance decimal.Decimal `json:"opening_balance"`
+	CreditBalance  decimal.Decimal `json:"credit_balance"`
 }
 
 // nil field = leave unchanged
@@ -36,6 +38,7 @@ type UpdateSupplierInput struct {
 	Address        *string          `json:"address"`
 	PanNo          *string          `json:"pan_no"`
 	OpeningBalance *decimal.Decimal `json:"opening_balance"`
+	CreditBalance  *decimal.Decimal `json:"credit_balance"`
 	IsActive       *bool            `json:"is_active"`
 }
 

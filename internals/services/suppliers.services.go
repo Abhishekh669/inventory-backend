@@ -15,9 +15,9 @@ var ErrInvalidSupplier = errors.New("invalid supplier data")
 
 type SupplierService interface {
 	// interface
-	CreateSuppliers(ctx context.Context, in []models.CreateSupplierInput) ([]models.Supplier, error)
+	CreateSuppliers(ctx context.Context, in []models.CreateSupplierInput, id uuid.UUID) ([]models.Supplier, error)
 	DeleteSuppliers(ctx context.Context, ids []uuid.UUID) (int64, error)
-	UpdateSupplier(ctx context.Context, id uuid.UUID, in models.UpdateSupplierInput) (*models.Supplier, error)
+	UpdateSupplier(ctx context.Context, id uuid.UUID, in models.UpdateSupplierInput, userId uuid.UUID) (*models.Supplier, error)
 	GetSupplierById(ctx context.Context, id uuid.UUID) (*models.Supplier, error)
 	GetSuppliers(ctx context.Context) ([]models.Supplier, error)
 }
@@ -38,7 +38,7 @@ func trimPtr(s *string) *string {
 	return &t
 }
 
-func (s *supplierService) UpdateSupplier(ctx context.Context, id uuid.UUID, in models.UpdateSupplierInput) (*models.Supplier, error) {
+func (s *supplierService) UpdateSupplier(ctx context.Context, id uuid.UUID, in models.UpdateSupplierInput, userId uuid.UUID) (*models.Supplier, error) {
 	in.Name = trimPtr(in.Name)
 	if in.Name != nil && *in.Name == "" {
 		return nil, errors.New("supplier name cannot be empty")
@@ -48,7 +48,7 @@ func (s *supplierService) UpdateSupplier(ctx context.Context, id uuid.UUID, in m
 	in.Address = trimPtr(in.Address)
 	in.PanNo = trimPtr(in.PanNo)
 
-	return s.repo.UpdateSupplier(ctx, id, in)
+	return s.repo.UpdateSupplier(ctx, id, in, userId)
 }
 
 func (s *supplierService) GetSupplierById(ctx context.Context, id uuid.UUID) (*models.Supplier, error) {
@@ -58,7 +58,7 @@ func (s *supplierService) GetSupplierById(ctx context.Context, id uuid.UUID) (*m
 func (s *supplierService) GetSuppliers(ctx context.Context) ([]models.Supplier, error) {
 	return s.repo.GetSuppliers(ctx)
 }
-func (s *supplierService) CreateSuppliers(ctx context.Context, inputs []models.CreateSupplierInput) ([]models.Supplier, error) {
+func (s *supplierService) CreateSuppliers(ctx context.Context, inputs []models.CreateSupplierInput, id uuid.UUID) ([]models.Supplier, error) {
 	if len(inputs) == 0 {
 		return nil, errors.New("at least one supplier is required")
 	}
@@ -75,7 +75,7 @@ func (s *supplierService) CreateSuppliers(ctx context.Context, inputs []models.C
 		inputs[i].Address = trimPtr(inputs[i].Address)
 		inputs[i].PanNo = trimPtr(inputs[i].PanNo)
 	}
-	return s.repo.CreateSuppliers(ctx, inputs)
+	return s.repo.CreateSuppliers(ctx, inputs, id)
 }
 
 func (s *supplierService) DeleteSuppliers(ctx context.Context, ids []uuid.UUID) (int64, error) {

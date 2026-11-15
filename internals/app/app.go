@@ -34,6 +34,14 @@ type App struct {
 	PurchaseOrderService services.PurchaseOrderService
 	PurchaseOrderHandler handlers.PurchaseOrderHandler
 
+	PurchaseRepo    repository.PurchaseRepository
+	PurchaseService services.PurchaseService
+	PurchaseHandler handlers.PurchaseHandler
+
+	SupplierPaymentRepo    repository.SupplierPaymentRepository
+	SupplierPaymentService services.SupplierPaymentService
+	SupplierPaymentHandler handlers.SupplierPaymentHandler
+
 	PermissionChecker authMiddleware.PermissionChecker
 }
 
@@ -69,6 +77,15 @@ func New() (*App, error) {
 	purchaseOrderService := services.NewPurchaseOrderService(purchaseOrderRepo)
 	purchaseOrderHandler := handlers.NewPurchaseOrderHandler(purchaseOrderService)
 
+	purchaseRepo := repository.NewPurchaseRepository()
+	purchaseService := services.NewPurchaseService(purchaseRepo)
+	purchaseHandler := handlers.NewPurchaseHandler(purchaseService)
+
+	// Supplier Payment
+	supplierPaymentRepo := repository.NewSupplierPaymentRepository()
+	supplierPaymentService := services.NewSupplierPaymentService(supplierPaymentRepo)
+	supplierPaymentHandler := handlers.NewSupplierPaymentHandler(supplierPaymentService)
+
 	return &App{
 		UserRepo:    userRepo,
 		UserService: userService,
@@ -93,6 +110,14 @@ func New() (*App, error) {
 		PurchaseOrderRepo:    purchaseOrderRepo,
 		PurchaseOrderService: purchaseOrderService,
 		PurchaseOrderHandler: *purchaseOrderHandler,
+
+		PurchaseRepo:    purchaseRepo,
+		PurchaseService: purchaseService,
+		PurchaseHandler: *purchaseHandler,
+
+		SupplierPaymentRepo:    supplierPaymentRepo,
+		SupplierPaymentService: supplierPaymentService,
+		SupplierPaymentHandler: *supplierPaymentHandler,
 
 		PermissionChecker: *checker,
 	}, nil

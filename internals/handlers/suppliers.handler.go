@@ -85,7 +85,13 @@ func (h *SupplierHandler) CreateSuppliers(c *gin.Context) {
 		return
 	}
 
-	suppliers, err := h.supplierService.CreateSuppliers(c.Request.Context(), createSuppliersData)
+	user, ok := helpers.GetUserContext(c)
+	if !ok {
+		helpers.Error(c, http.StatusUnauthorized, "user unauthorized")
+		return
+	}
+
+	suppliers, err := h.supplierService.CreateSuppliers(c.Request.Context(), createSuppliersData, user.UserID)
 	if err != nil {
 		handleSupplierError(c, err)
 		return
@@ -106,8 +112,13 @@ func (h *SupplierHandler) UpdateSupplier(c *gin.Context) {
 		helpers.Error(c, http.StatusBadRequest, "invalid payload")
 		return
 	}
+	user, ok := helpers.GetUserContext(c)
+	if !ok {
+		helpers.Error(c, http.StatusUnauthorized, "user unauthorized")
+		return
+	}
 
-	supplier, err := h.supplierService.UpdateSupplier(c.Request.Context(), id, updateSupplierData)
+	supplier, err := h.supplierService.UpdateSupplier(c.Request.Context(), id, updateSupplierData, user.UserID)
 	if err != nil {
 		handleSupplierError(c, err)
 		return
