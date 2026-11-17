@@ -16,11 +16,22 @@ import (
 )
 
 type PurchaseService interface {
+	GetPurchaseDataById(ctx context.Context, purchaseID uuid.UUID) (*models.PurchaseByIdResponse, error)
+
 	GetAllPurchases(ctx context.Context, q models.PurchaseListQuery) (*models.GetAllPurchaseResponse, error)
 
 	CreatePurchase(ctx context.Context, userID uuid.UUID, req models.CreatePurchaseRequest) (uuid.UUID, error)
-}
+	UpdatePurchase(ctx context.Context, userID, purchaseID uuid.UUID, req models.UpdatePurchaseRequest) error
+	DeletePurchase(ctx context.Context, userID, purchaseID uuid.UUID) error
 
+	CreatePurchaseReturn(ctx context.Context, userID, purchaseID uuid.UUID, req models.CreatePurchaseReturnRequest) (uuid.UUID, error)
+	UpdatePurchaseReturn(ctx context.Context, userID, purchaseID, returnID uuid.UUID, req models.CreatePurchaseReturnRequest) error
+	DeletePurchaseReturn(ctx context.Context, userID, purchaseID, returnID uuid.UUID) error
+
+	CreatePurchasePayment(ctx context.Context, userID, purchaseID uuid.UUID, req models.CreatePurchasePaymentRequest) (uuid.UUID, error)
+	UpdatePurchasePayment(ctx context.Context, userID, purchaseID, paymentID uuid.UUID, req models.UpdatePurchasePaymentRequest) error
+	DeletePurchasePayment(ctx context.Context, userID, purchaseID, paymentID uuid.UUID) error
+}
 type purchaseService struct {
 	repo repository.PurchaseRepository
 }
@@ -167,6 +178,9 @@ func (s *purchaseService) GetAllPurchases(ctx context.Context, q models.Purchase
 }
 
 func (s *purchaseService) CreatePurchase(ctx context.Context, userID uuid.UUID, req models.CreatePurchaseRequest) (uuid.UUID, error) {
+	if req.PurchaseOrderID == uuid.Nil {
+		return uuid.Nil, models.NewValidationError("purchase order is required")
+	}
 	if err := normalizeAndValidate(&req); err != nil {
 		return uuid.Nil, err
 	}
@@ -177,6 +191,40 @@ func (s *purchaseService) CreatePurchase(ctx context.Context, userID uuid.UUID, 
 	return s.repo.CreatePurchase(ctx, userID, calc)
 }
 
+func (s *purchaseService) UpdatePurchase(ctx context.Context, userID, purchaseID uuid.UUID, req models.UpdatePurchaseRequest) error {
+	if purchaseID == uuid.Nil {
+		return models.NewValidationError("invalid purchase id")
+	}
+	// same validation and bill calculation as a new purchase; payments are untouched
+	shell := models.CreatePurchaseRequest{
+		SupplierBillNo:  req.SupplierBillNo,
+		PurchaseDate:    req.PurchaseDate,
+		DueDate:         req.DueDate,
+		ExciseDuty:      req.ExciseDuty,
+		SpecialDiscount: req.SpecialDiscount,
+		Discount:        req.Discount,
+		VatRate:         req.VatRate,
+		FreightCharge:   req.FreightCharge,
+		Note:            req.Note,
+		Items:           req.Items,
+	}
+	if err := normalizeAndValidate(&shell); err != nil {
+		return err
+	}
+	calc, err := calculatePurchase(shell)
+	if err != nil {
+		return err
+	}
+	return s.repo.UpdatePurchase(ctx, userID, purchaseID, calc)
+}
+
+func (s *purchaseService) DeletePurchase(ctx context.Context, userID, purchaseID uuid.UUID) error {
+	if purchaseID == uuid.Nil {
+		return models.NewValidationError("invalid purchase id")
+	}
+	return s.repo.DeletePurchase(ctx, userID, purchaseID)
+}
+
 func normalizeAndValidate(req *models.CreatePurchaseRequest) error {
 	bad := models.NewValidationError
 
@@ -184,9 +232,7 @@ func normalizeAndValidate(req *models.CreatePurchaseRequest) error {
 	if req.SupplierBillNo == "" || len(req.SupplierBillNo) > 50 {
 		return bad("supplier bill number is required (max 50 characters)")
 	}
-	if req.PurchaseOrderID == uuid.Nil {
-		return bad("purchase order is required")
-	}
+
 	purchaseDate, err := time.Parse("2006-01-02", req.PurchaseDate)
 	if err != nil {
 		return bad("invalid purchase date")
@@ -319,4 +365,191 @@ func calculatePurchase(req models.CreatePurchaseRequest) (*models.PurchaseCalc, 
 		calc.PaymentStatus = models.PaymentUnpaid
 	}
 	return calc, nil
+}
+
+func (s *purchaseService) GetPurchaseDataById(ctx context.Context, purchaseID uuid.UUID) (*models.PurchaseByIdResponse, error) {
+	if purchaseID == uuid.Nil {
+		return nil, models.NewValidationError("invalid purchase id")
+	}
+	return s.repo.GetPurchaseDataById(ctx, purchaseID)
+}
+
+// normalizeReturn validates a return request and returns its total.
+func normalizeReturn(req *models.CreatePurchaseReturnRequest) (decimal.Decimal, error) {
+	bad := models.NewValidationError
+
+	date := strings.TrimSpace(req.ReturnDate)
+	if date == "" {
+		date = time.Now().Format("2006-01-02")
+	}
+	if _, err := time.Parse("2006-01-02", date); err != nil {
+		return decimal.Zero, bad("invalid return date")
+	}
+	req.ReturnDate = date
+
+	if req.Note != nil {
+		n := strings.TrimSpace(*req.Note)
+		if n == "" {
+			req.Note = nil
+		} else {
+			req.Note = &n
+		}
+	}
+
+	items := make([]models.CreatePurchaseReturnItemRequest, 0, len(req.Items))
+	seen := map[uuid.UUID]bool{}
+	total := decimal.Zero
+	for _, it := range req.Items {
+		it.Qty = it.Qty.Round(3)
+		it.Amount = it.Amount.Round(2)
+		if it.Qty.IsNegative() || it.Amount.IsNegative() {
+			return decimal.Zero, bad("quantity and amount cannot be negative")
+		}
+		if it.Qty.IsZero() {
+			continue
+		}
+		if it.PurchaseItemID == uuid.Nil {
+			return decimal.Zero, bad("purchase item is required")
+		}
+		if seen[it.PurchaseItemID] {
+			return decimal.Zero, bad("an item appears more than once")
+		}
+		seen[it.PurchaseItemID] = true
+		if it.Reason != nil {
+			rs := strings.TrimSpace(*it.Reason)
+			if len(rs) > 250 {
+				return decimal.Zero, bad("reason is too long (max 250 characters)")
+			}
+			if rs == "" {
+				it.Reason = nil
+			} else {
+				it.Reason = &rs
+			}
+		}
+		items = append(items, it)
+		total = total.Add(it.Amount)
+	}
+	if len(items) == 0 {
+		return decimal.Zero, bad("select at least one item to return")
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].PurchaseItemID.String() < items[j].PurchaseItemID.String() })
+	req.Items = items
+	return total.Round(2), nil
+}
+
+func (s *purchaseService) CreatePurchaseReturn(ctx context.Context, userID, purchaseID uuid.UUID, req models.CreatePurchaseReturnRequest) (uuid.UUID, error) {
+	if purchaseID == uuid.Nil {
+		return uuid.Nil, models.NewValidationError("invalid purchase id")
+	}
+	total, err := normalizeReturn(&req)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return s.repo.CreatePurchaseReturn(ctx, userID, purchaseID, &models.PurchaseReturnCalc{Req: req, Total: total})
+}
+
+func (s *purchaseService) UpdatePurchaseReturn(ctx context.Context, userID, purchaseID, returnID uuid.UUID, req models.CreatePurchaseReturnRequest) error {
+	if purchaseID == uuid.Nil || returnID == uuid.Nil {
+		return models.NewValidationError("invalid id")
+	}
+	total, err := normalizeReturn(&req)
+	if err != nil {
+		return err
+	}
+	return s.repo.UpdatePurchaseReturn(ctx, userID, purchaseID, returnID, &models.PurchaseReturnCalc{Req: req, Total: total})
+}
+
+func (s *purchaseService) DeletePurchaseReturn(ctx context.Context, userID, purchaseID, returnID uuid.UUID) error {
+	if purchaseID == uuid.Nil || returnID == uuid.Nil {
+		return models.NewValidationError("invalid id")
+	}
+	return s.repo.DeletePurchaseReturn(ctx, userID, purchaseID, returnID)
+}
+
+func (s *purchaseService) UpdatePurchasePayment(ctx context.Context, userID, purchaseID, paymentID uuid.UUID, req models.UpdatePurchasePaymentRequest) error {
+	bad := models.NewValidationError
+	if purchaseID == uuid.Nil || paymentID == uuid.Nil {
+		return bad("invalid id")
+	}
+
+	req.Amount = req.Amount.Round(2)
+	if !req.Amount.IsPositive() {
+		return bad("amount must be greater than zero. Delete the payment to remove it.")
+	}
+
+	// an empty date or method means "leave as it is"
+	req.PaymentDate = strings.TrimSpace(req.PaymentDate)
+	if req.PaymentDate != "" {
+		if _, err := time.Parse("2006-01-02", req.PaymentDate); err != nil {
+			return bad("invalid payment date")
+		}
+	}
+	switch req.PaymentMethod {
+	case models.PaymentMethodCash, models.PaymentMethodBank, models.PaymentMethodCheque, models.PaymentMethodOnline, "":
+	default:
+		return bad("invalid payment method")
+	}
+
+	if req.Note != nil {
+		n := strings.TrimSpace(*req.Note)
+		if n == "" {
+			req.Note = nil
+		} else {
+			req.Note = &n
+		}
+	}
+	return s.repo.UpdatePurchasePayment(ctx, userID, purchaseID, paymentID, &req)
+}
+
+func (s *purchaseService) DeletePurchasePayment(ctx context.Context, userID, purchaseID, paymentID uuid.UUID) error {
+	if purchaseID == uuid.Nil || paymentID == uuid.Nil {
+		return models.NewValidationError("invalid id")
+	}
+	return s.repo.DeletePurchasePayment(ctx, userID, purchaseID, paymentID)
+}
+
+func (s *purchaseService) CreatePurchasePayment(ctx context.Context, userID, purchaseID uuid.UUID, req models.CreatePurchasePaymentRequest) (uuid.UUID, error) {
+	bad := models.NewValidationError
+	if purchaseID == uuid.Nil {
+		return uuid.Nil, bad("invalid purchase id")
+	}
+
+	req.Amount = req.Amount.Round(2)
+	if !req.Amount.IsPositive() {
+		return uuid.Nil, bad("amount must be greater than zero")
+	}
+
+	date := strings.TrimSpace(req.PaymentDate)
+	if date == "" {
+		date = time.Now().Format("2006-01-02")
+	}
+	if _, err := time.Parse("2006-01-02", date); err != nil {
+		return uuid.Nil, bad("invalid payment date")
+	}
+	req.PaymentDate = date
+
+	switch req.Source {
+	case models.PaymentTypeRegular:
+		switch req.PaymentMethod {
+		case models.PaymentMethodCash, models.PaymentMethodBank, models.PaymentMethodCheque, models.PaymentMethodOnline:
+		case "":
+			req.PaymentMethod = models.PaymentMethodCash
+		default:
+			return uuid.Nil, bad("invalid payment method")
+		}
+	case models.PaymentTypeAdvance:
+		req.PaymentMethod = ""
+	default:
+		return uuid.Nil, bad("choose how to pay: manually or from advance credit")
+	}
+
+	if req.Note != nil {
+		n := strings.TrimSpace(*req.Note)
+		if n == "" {
+			req.Note = nil
+		} else {
+			req.Note = &n
+		}
+	}
+	return s.repo.CreatePurchasePayment(ctx, userID, purchaseID, &req)
 }

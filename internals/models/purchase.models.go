@@ -1,6 +1,7 @@
 package models
 
 import (
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -216,3 +217,144 @@ type ValidationError struct{ Message string }
 func (e *ValidationError) Error() string { return e.Message }
 
 func NewValidationError(msg string) error { return &ValidationError{Message: msg} }
+
+var ErrNotFound = errors.New("not found")
+
+type PurchaseSupplier struct {
+	ID            uuid.UUID `json:"id"`
+	Name          string    `json:"name"`
+	ContactPerson *string   `json:"contact_person"`
+	Phone         *string   `json:"phone"`
+	Address       *string   `json:"address"`
+	PanNo         *string   `json:"pan_no"`
+	IsActive      bool      `json:"is_active"`
+}
+
+// Purchase fields are flattened into the JSON, plus the creator's name.
+type PurchaseDetail struct {
+	Purchase
+	CreatedByName *string `json:"created_by_name"`
+}
+
+type PurchaseItemDetail struct {
+	ID               uuid.UUID        `json:"id"`
+	ProductID        uuid.UUID        `json:"product_id"`
+	ProductName      string           `json:"product_name"`
+	ProductSKU       string           `json:"product_sku"`
+	UnitName         string           `json:"unit_name"`
+	AllowDecimal     bool             `json:"allow_decimal"`
+	POIID            *uuid.UUID       `json:"poi_id"`
+	Qty              decimal.Decimal  `json:"qty"`
+	Rate             decimal.Decimal  `json:"rate"`
+	VATAmount        decimal.Decimal  `json:"vat_amount"`
+	UnitCost         decimal.Decimal  `json:"unit_cost"`
+	UnitCostWithVAT  decimal.Decimal  `json:"unit_cost_with_vat"`
+	LineValue        decimal.Decimal  `json:"line_value"`         // qty x rate
+	QtyOrdered       *decimal.Decimal `json:"qty_ordered"`        // from the PO line, nil for added products
+	ExpectedUnitCost *decimal.Decimal `json:"expected_unit_cost"` // from the PO line
+
+	ReturnedQty decimal.Decimal `json:"returned_qty"`
+}
+
+type PurchaseOrderInfo struct {
+	ID            uuid.UUID           `json:"id"`
+	PONo          string              `json:"po_no"`
+	Title         *string             `json:"title"`
+	OrderDate     string              `json:"order_date"`    // YYYY-MM-DD
+	ExpectedDate  *string             `json:"expected_date"` // YYYY-MM-DD
+	Status        PurchaseOrderStatus `json:"status"`
+	Note          *string             `json:"note"`
+	CreatedByName *string             `json:"created_by_name"`
+	CreatedAt     time.Time           `json:"created_at"`
+}
+
+type PurchasePayment struct {
+	ID            uuid.UUID       `json:"id"`
+	Amount        decimal.Decimal `json:"amount"` // the part allocated to this purchase
+	PaymentDate   string          `json:"payment_date"`
+	PaymentMethod string          `json:"payment_method"`
+	PaymentType   string          `json:"payment_type"`
+	Note          *string         `json:"note"`
+	CreatedByName *string         `json:"created_by_name"`
+	CreatedAt     time.Time       `json:"created_at"`
+}
+type PurchaseByIdResponse struct {
+	SupplierData       PurchaseSupplier          `json:"supplier_data"`
+	PurchaseData       PurchaseDetail            `json:"purchase_data"`
+	PurchaseItems      []PurchaseItemDetail      `json:"purchase_items"`
+	PurchaseOrderData  *PurchaseOrderInfo        `json:"purchase_order_data"`
+	PurchaseOrderItems []PurchaseOrderItemDetail `json:"purchase_order_items"`
+	Payments           []PurchasePayment         `json:"payments"`
+
+	Returns []PurchaseReturnDetail `json:"returns"`
+}
+
+type UpdatePurchaseRequest struct {
+	SupplierBillNo  string                      `json:"supplier_bill_no"`
+	PurchaseDate    string                      `json:"purchase_date"`
+	DueDate         *string                     `json:"due_date"`
+	ExciseDuty      decimal.Decimal             `json:"excise_duty"`
+	SpecialDiscount decimal.Decimal             `json:"special_discount"`
+	Discount        decimal.Decimal             `json:"discount"`
+	VatRate         decimal.Decimal             `json:"vat_rate"`
+	FreightCharge   decimal.Decimal             `json:"freight_charge"`
+	Note            *string                     `json:"note"`
+	Items           []CreatePurchaseItemRequest `json:"items"` // matched to existing lines by product_id
+}
+
+type CreatePurchaseReturnItemRequest struct {
+	PurchaseItemID uuid.UUID       `json:"purchase_item_id"`
+	Qty            decimal.Decimal `json:"qty"`
+	Amount         decimal.Decimal `json:"amount"`
+	Reason         *string         `json:"reason"`
+}
+
+type CreatePurchaseReturnRequest struct {
+	ReturnDate string                            `json:"return_date"`
+	Note       *string                           `json:"note"`
+	Items      []CreatePurchaseReturnItemRequest `json:"items"`
+}
+
+type PurchaseReturnCalc struct {
+	Req   CreatePurchaseReturnRequest
+	Total decimal.Decimal
+}
+
+type CreatePurchasePaymentRequest struct {
+	Amount        decimal.Decimal `json:"amount"`
+	PaymentDate   string          `json:"payment_date"`
+	Source        PaymentType     `json:"source"`
+	PaymentMethod PaymentMethod   `json:"payment_method"`
+	Note          *string         `json:"note"`
+}
+
+type PurchaseReturnItemDetail struct {
+	ID             uuid.UUID       `json:"id"`
+	PurchaseItemID uuid.UUID       `json:"purchase_item_id"`
+	ProductID      uuid.UUID       `json:"product_id"`
+	ProductName    string          `json:"product_name"`
+	ProductSKU     string          `json:"product_sku"`
+	UnitName       string          `json:"unit_name"`
+	AllowDecimal   bool            `json:"allow_decimal"`
+	Qty            decimal.Decimal `json:"qty"`
+	Amount         decimal.Decimal `json:"amount"`
+	Reason         *string         `json:"reason"`
+}
+
+type PurchaseReturnDetail struct {
+	ID            uuid.UUID                  `json:"id"`
+	ReturnNo      string                     `json:"return_no"`
+	ReturnDate    string                     `json:"return_date"`
+	Total         decimal.Decimal            `json:"total"`
+	Note          *string                    `json:"note"`
+	CreatedByName *string                    `json:"created_by_name"`
+	CreatedAt     time.Time                  `json:"created_at"`
+	Items         []PurchaseReturnItemDetail `json:"items"`
+}
+
+type UpdatePurchasePaymentRequest struct {
+	Amount        decimal.Decimal `json:"amount"`
+	PaymentDate   string          `json:"payment_date"`
+	PaymentMethod PaymentMethod   `json:"payment_method"`
+	Note          *string         `json:"note"`
+}
