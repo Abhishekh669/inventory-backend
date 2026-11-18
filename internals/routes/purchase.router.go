@@ -16,6 +16,9 @@ func PurchaseServiceRouter(router *gin.RouterGroup, app *app.App) {
 	purchaseServiceRoute.GET("/get-purchase/:purchase_id", app.PermissionChecker.Require(rbac.PurchaseView), app.PurchaseHandler.GetPurchaseDataById)
 	purchaseServiceRoute.GET("/get-purchases", app.PermissionChecker.Require(rbac.PurchaseView), app.PurchaseHandler.GetAllPurchases)
 
+	purchaseServiceRoute.GET("/get-supplier-purchases/:supplier_id", app.PermissionChecker.Require(rbac.PurchaseView), app.PurchaseHandler.GetSupplierPurchases)
+	purchaseServiceRoute.GET("/get-supplier-returns/:supplier_id", app.PermissionChecker.Require(rbac.PurchaseView), app.PurchaseHandler.GetSupplierReturns)
+
 	// post
 	purchaseServiceRoute.POST("/create-purchase", app.PermissionChecker.Require(rbac.PurchaseCreate), app.PurchaseHandler.CreatePurchase)
 	purchaseServiceRoute.POST("/create-purchase-return/:purchase_id", app.PermissionChecker.Require(rbac.OrderManage), app.PurchaseHandler.CreatePurchaseReturn)
@@ -30,4 +33,5 @@ func PurchaseServiceRouter(router *gin.RouterGroup, app *app.App) {
 	purchaseServiceRoute.DELETE("/delete-purchase/:purchase_id", app.PermissionChecker.Require(rbac.OrderManage), app.PurchaseHandler.DeletePurchase)
 	purchaseServiceRoute.DELETE("/delete-purchase-return/:purchase_id/:return_id", app.PermissionChecker.Require(rbac.OrderManage), app.PurchaseHandler.DeletePurchaseReturn)
 	purchaseServiceRoute.DELETE("/delete-purchase-payment/:purchase_id/:payment_id", app.PermissionChecker.Require(rbac.OrderManage), app.PurchaseHandler.DeletePurchasePayment)
+
 }

@@ -347,3 +347,75 @@ func (h *PurchaseHandler) DeletePurchasePayment(c *gin.Context) {
 	}
 	helpers.Success(c, http.StatusOK, "payment deleted", gin.H{"payment_id": paymentID})
 }
+
+func purchaseSupplierIDParam(c *gin.Context) (uuid.UUID, bool) {
+	id, err := helpers.StringToUUID(c.Param("supplier_id"))
+	if err != nil || id == uuid.Nil {
+		helpers.Error(c, http.StatusBadRequest, "invalid supplier id")
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+func supplierListLimit(c *gin.Context) (int, bool) {
+	raw := c.Query("limit")
+	if raw == "" {
+		return 0, true
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		helpers.Error(c, http.StatusBadRequest, "limit must be a positive number")
+		return 0, false
+	}
+	return n, true
+}
+
+// GET /purchase-service/get-supplier-purchases/:supplier_id
+func (h *PurchaseHandler) GetSupplierPurchases(c *gin.Context) {
+	supplierID, ok := purchaseSupplierIDParam(c)
+	if !ok {
+		return
+	}
+	limit, ok := supplierListLimit(c)
+	if !ok {
+		return
+	}
+
+	resp, err := h.purchaseService.GetSupplierPurchases(c.Request.Context(), supplierID, models.SupplierPurchaseListQuery{
+		PaymentStatus:  c.Query("payment_status"),
+		PurchaseStatus: c.Query("purchase_status"),
+		FromDate:       c.Query("from_date"),
+		ToDate:         c.Query("to_date"),
+		Cursor:         c.Query("cursor"),
+		Limit:          limit,
+	})
+	if err != nil {
+		handlePurchaseError(c, err)
+		return
+	}
+	helpers.Success(c, http.StatusOK, "supplier purchases fetched successfully", resp)
+}
+
+// GET /purchase-service/get-supplier-returns/:supplier_id
+func (h *PurchaseHandler) GetSupplierReturns(c *gin.Context) {
+	supplierID, ok := purchaseSupplierIDParam(c)
+	if !ok {
+		return
+	}
+	limit, ok := supplierListLimit(c)
+	if !ok {
+		return
+	}
+
+	resp, err := h.purchaseService.GetSupplierReturns(c.Request.Context(), supplierID, models.SupplierReturnListQuery{
+		FromDate: c.Query("from_date"),
+		ToDate:   c.Query("to_date"),
+		Cursor:   c.Query("cursor"),
+		Limit:    limit,
+	})
+	if err != nil {
+		handlePurchaseError(c, err)
+		return
+	}
+	helpers.Success(c, http.StatusOK, "supplier returns fetched successfully", resp)
+}

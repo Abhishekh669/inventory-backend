@@ -313,6 +313,11 @@ var postgressSchemaOrderedTables = []struct {
 
         CREATE INDEX IF NOT EXISTS idx_purchases_status
         ON purchases(status);
+
+        CREATE INDEX IF NOT EXISTS idx_purchase_returns_supplier_date
+        ON purchase_returns(supplier_id, return_date DESC, created_at DESC, id DESC);
+    
+		
     `,
 	},
 	{
@@ -372,6 +377,9 @@ var postgressSchemaOrderedTables = []struct {
 
         CREATE INDEX IF NOT EXISTS idx_purchase_returns_supplier
         ON purchase_returns(supplier_id);
+
+        CREATE INDEX IF NOT EXISTS idx_purchase_returns_supplier_date
+        ON purchase_returns(supplier_id, return_date DESC, created_at DESC, id DESC);
     `,
 	},
 	{

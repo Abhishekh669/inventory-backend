@@ -31,6 +31,9 @@ type PurchaseService interface {
 	CreatePurchasePayment(ctx context.Context, userID, purchaseID uuid.UUID, req models.CreatePurchasePaymentRequest) (uuid.UUID, error)
 	UpdatePurchasePayment(ctx context.Context, userID, purchaseID, paymentID uuid.UUID, req models.UpdatePurchasePaymentRequest) error
 	DeletePurchasePayment(ctx context.Context, userID, purchaseID, paymentID uuid.UUID) error
+
+	GetSupplierPurchases(ctx context.Context, supplierID uuid.UUID, q models.SupplierPurchaseListQuery) (*models.GetSupplierPurchasesResponse, error)
+	GetSupplierReturns(ctx context.Context, supplierID uuid.UUID, q models.SupplierReturnListQuery) (*models.GetSupplierReturnsResponse, error)
 }
 type purchaseService struct {
 	repo repository.PurchaseRepository
@@ -552,4 +555,143 @@ func (s *purchaseService) CreatePurchasePayment(ctx context.Context, userID, pur
 		}
 	}
 	return s.repo.CreatePurchasePayment(ctx, userID, purchaseID, &req)
+}
+
+// NEW FILE: internals/services/purchase_supplier_lists.go
+//
+// Also add these two lines to the PurchaseService interface:
+//
+//
+
+func encodeSupplierListCursor(date string, createdAt time.Time, id uuid.UUID) string {
+	b, _ := json.Marshal(models.SupplierListCursor{Date: date, CreatedAt: createdAt, ID: id})
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func decodeSupplierListCursor(raw string) (*models.SupplierListCursor, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	b, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return nil, invalidf("invalid cursor")
+	}
+	var c models.SupplierListCursor
+	if err := json.Unmarshal(b, &c); err != nil || c.ID == uuid.Nil || c.CreatedAt.IsZero() {
+		return nil, invalidf("invalid cursor")
+	}
+	if _, err := time.Parse("2006-01-02", c.Date); err != nil {
+		return nil, invalidf("invalid cursor")
+	}
+	return &c, nil
+}
+
+func clampSupplierListLimit(limit int) int {
+	if limit <= 0 {
+		return defaultPurchaseListLimit
+	}
+	if limit > maxPurchaseListLimit {
+		return maxPurchaseListLimit
+	}
+	return limit
+}
+
+// both dates are inclusive (the columns are DATE, so no +1 day trick is needed)
+func parseSupplierDateRange(fromRaw, toRaw string) (from, to *time.Time, err error) {
+	if from, err = parseDay(fromRaw); err != nil {
+		return nil, nil, err
+	}
+	if to, err = parseDay(toRaw); err != nil {
+		return nil, nil, err
+	}
+	if from != nil && to != nil && from.After(*to) {
+		return nil, nil, invalidf("from_date must be on or before to_date")
+	}
+	return from, to, nil
+}
+
+func (s *purchaseService) GetSupplierPurchases(ctx context.Context, supplierID uuid.UUID, q models.SupplierPurchaseListQuery) (*models.GetSupplierPurchasesResponse, error) {
+	if supplierID == uuid.Nil {
+		return nil, invalidf("invalid supplier id")
+	}
+	limit := clampSupplierListLimit(q.Limit)
+	filter := models.SupplierPurchaseListFilter{SupplierID: supplierID, Limit: limit}
+
+	if raw := strings.TrimSpace(q.PaymentStatus); raw != "" {
+		ps := models.PaymentStatus(raw)
+		if !isValidPaymentStatus(ps) {
+			return nil, invalidf("unknown payment_status %q", raw)
+		}
+		filter.PaymentStatus = &ps
+	}
+	if raw := strings.TrimSpace(q.PurchaseStatus); raw != "" {
+		st := models.PurchaseStatus(raw)
+		if !isValidPurchaseStatus(st) {
+			return nil, invalidf("unknown purchase_status %q", raw)
+		}
+		filter.PurchaseStatus = &st
+	}
+
+	from, to, err := parseSupplierDateRange(q.FromDate, q.ToDate)
+	if err != nil {
+		return nil, err
+	}
+	filter.FromDate, filter.ToDate = from, to
+
+	cursor, err := decodeSupplierListCursor(q.Cursor)
+	if err != nil {
+		return nil, err
+	}
+	filter.Cursor = cursor
+
+	items, total, err := s.repo.GetSupplierPurchases(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &models.GetSupplierPurchasesResponse{Items: items, Total: total}
+	if len(items) > limit {
+		resp.Items = items[:limit]
+		resp.HasMore = true
+		last := items[limit-1]
+		next := encodeSupplierListCursor(last.PurchaseDate, last.CreatedAt, last.PurchaseID)
+		resp.NextCursor = &next
+	}
+	return resp, nil
+}
+
+func (s *purchaseService) GetSupplierReturns(ctx context.Context, supplierID uuid.UUID, q models.SupplierReturnListQuery) (*models.GetSupplierReturnsResponse, error) {
+	if supplierID == uuid.Nil {
+		return nil, invalidf("invalid supplier id")
+	}
+	limit := clampSupplierListLimit(q.Limit)
+	filter := models.SupplierReturnListFilter{SupplierID: supplierID, Limit: limit}
+
+	from, to, err := parseSupplierDateRange(q.FromDate, q.ToDate)
+	if err != nil {
+		return nil, err
+	}
+	filter.FromDate, filter.ToDate = from, to
+
+	cursor, err := decodeSupplierListCursor(q.Cursor)
+	if err != nil {
+		return nil, err
+	}
+	filter.Cursor = cursor
+
+	items, total, err := s.repo.GetSupplierReturns(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &models.GetSupplierReturnsResponse{Items: items, Total: total}
+	if len(items) > limit {
+		resp.Items = items[:limit]
+		resp.HasMore = true
+		last := items[limit-1]
+		next := encodeSupplierListCursor(last.ReturnDate, last.CreatedAt, last.PurchaseReturnID)
+		resp.NextCursor = &next
+	}
+	return resp, nil
 }

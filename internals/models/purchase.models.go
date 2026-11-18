@@ -358,3 +358,94 @@ type UpdatePurchasePaymentRequest struct {
 	PaymentMethod PaymentMethod   `json:"payment_method"`
 	Note          *string         `json:"note"`
 }
+
+// ADD to: internals/models/purchase.go (or keep as its own file in package models)
+
+// Cursor shared by both supplier lists.
+// Date is YYYY-MM-DD (purchase_date / return_date); the order is Date DESC, CreatedAt DESC, ID DESC.
+type SupplierListCursor struct {
+	Date      string    `json:"date"`
+	CreatedAt time.Time `json:"created_at"`
+	ID        uuid.UUID `json:"id"`
+}
+
+// ---------- purchases of one supplier ----------
+
+type SupplierPurchaseListQuery struct { // raw, from the handler
+	PaymentStatus  string
+	PurchaseStatus string
+	FromDate       string
+	ToDate         string
+	Cursor         string
+	Limit          int
+}
+
+type SupplierPurchaseListFilter struct { // validated, for the repository
+	SupplierID     uuid.UUID
+	PaymentStatus  *PaymentStatus
+	PurchaseStatus *PurchaseStatus
+	FromDate       *time.Time // inclusive
+	ToDate         *time.Time // inclusive
+	Cursor         *SupplierListCursor
+	Limit          int
+}
+
+type SupplierPurchaseItem struct {
+	PurchaseID          uuid.UUID       `json:"purchase_id"`
+	SupplierID          uuid.UUID       `json:"supplier_id"`
+	SupplierName        string          `json:"supplier_name"`
+	PurchaseOrderID     *uuid.UUID      `json:"purchase_order_id"`
+	PurchaseOrderNumber *string         `json:"po_no"`
+	SupplierBillNo      string          `json:"supplier_bill_no"`
+	PurchaseDate        string          `json:"purchase_date"` // YYYY-MM-DD
+	Total               decimal.Decimal `json:"total"`
+	PaidAmount          decimal.Decimal `json:"paid_amount"`
+	DueAmount           decimal.Decimal `json:"due_amount"`
+	PaymentStatus       PaymentStatus   `json:"payment_status"`
+	Status              PurchaseStatus  `json:"status"`
+	Note                *string         `json:"note"`
+	CreatedAt           time.Time       `json:"created_at"`
+}
+
+type GetSupplierPurchasesResponse struct {
+	Items      []SupplierPurchaseItem `json:"items"`
+	Total      int                    `json:"total"`
+	NextCursor *string                `json:"next_cursor"`
+	HasMore    bool                   `json:"has_more"`
+}
+
+// ---------- purchase returns of one supplier ----------
+
+type SupplierReturnListQuery struct { // raw, from the handler
+	FromDate string
+	ToDate   string
+	Cursor   string
+	Limit    int
+}
+
+type SupplierReturnListFilter struct { // validated, for the repository
+	SupplierID uuid.UUID
+	FromDate   *time.Time // inclusive
+	ToDate     *time.Time // inclusive
+	Cursor     *SupplierListCursor
+	Limit      int
+}
+
+type SupplierReturnItem struct {
+	PurchaseReturnID uuid.UUID       `json:"purchase_return_id"`
+	ReturnNo         string          `json:"return_no"`
+	PurchaseID       uuid.UUID       `json:"purchase_id"`
+	SupplierBillNo   string          `json:"supplier_bill_no"`
+	SupplierID       uuid.UUID       `json:"supplier_id"`
+	ReturnDate       string          `json:"return_date"` // YYYY-MM-DD
+	Total            decimal.Decimal `json:"total"`
+	Note             *string         `json:"note"`
+	CreatedAt        time.Time       `json:"created_at"`
+}
+
+type GetSupplierReturnsResponse struct {
+	Items      []SupplierReturnItem `json:"items"`
+	Total      int                  `json:"total"`
+	NextCursor *string              `json:"next_cursor"`
+	HasMore    bool                 `json:"has_more"`
+}

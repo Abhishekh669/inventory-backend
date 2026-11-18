@@ -34,6 +34,9 @@ type PurchaseRepository interface {
 	CreatePurchasePayment(ctx context.Context, userID, purchaseID uuid.UUID, req *models.CreatePurchasePaymentRequest) (uuid.UUID, error)
 	UpdatePurchasePayment(ctx context.Context, userID, purchaseID, paymentID uuid.UUID, req *models.UpdatePurchasePaymentRequest) error
 	DeletePurchasePayment(ctx context.Context, userID, purchaseID, paymentID uuid.UUID) error
+
+	GetSupplierPurchases(ctx context.Context, f models.SupplierPurchaseListFilter) ([]models.SupplierPurchaseItem, int, error)
+	GetSupplierReturns(ctx context.Context, f models.SupplierReturnListFilter) ([]models.SupplierReturnItem, int, error)
 }
 
 type purchaseRepository struct {
@@ -2056,4 +2059,161 @@ func loadPurchasePayment(ctx context.Context, tx pgx.Tx, purchaseID, paymentID u
 		return nil, fmt.Errorf("load payment: %w", err)
 	}
 	return &p, nil
+}
+
+// NEW FILE: internals/repository/purchase_supplier_lists.go
+//
+// Also add these two lines to the PurchaseRepository interface:
+//
+//	GetSupplierPurchases(ctx context.Context, f models.SupplierPurchaseListFilter) ([]models.SupplierPurchaseItem, int, error)
+//	GetSupplierReturns(ctx context.Context, f models.SupplierReturnListFilter) ([]models.SupplierReturnItem, int, error)
+
+const dateLayout = "2006-01-02"
+
+func (r *purchaseRepository) GetSupplierPurchases(ctx context.Context, f models.SupplierPurchaseListFilter) ([]models.SupplierPurchaseItem, int, error) {
+	conds := []string{"p.supplier_id = $1"}
+	args := []any{f.SupplierID}
+
+	if f.PaymentStatus != nil {
+		args = append(args, string(*f.PaymentStatus))
+		conds = append(conds, fmt.Sprintf("p.payment_status = $%d", len(args)))
+	}
+	if f.PurchaseStatus != nil {
+		args = append(args, string(*f.PurchaseStatus))
+		conds = append(conds, fmt.Sprintf("p.status = $%d", len(args)))
+	}
+	if f.FromDate != nil {
+		args = append(args, f.FromDate.Format(dateLayout))
+		conds = append(conds, fmt.Sprintf("p.purchase_date >= $%d::date", len(args)))
+	}
+	if f.ToDate != nil {
+		args = append(args, f.ToDate.Format(dateLayout))
+		conds = append(conds, fmt.Sprintf("p.purchase_date <= $%d::date", len(args)))
+	}
+	filterSQL := strings.Join(conds, " AND ")
+
+	const fromSQL = `
+		FROM purchases p
+		JOIN suppliers s ON s.id = p.supplier_id
+		LEFT JOIN purchase_orders po ON po.id = p.purchase_order_id
+	`
+
+	// the count ignores the cursor, so the total is the same on every page
+	var total int
+	if err := r.pool.QueryRow(ctx, "SELECT COUNT(*) "+fromSQL+" WHERE "+filterSQL, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count supplier purchases: %w", err)
+	}
+	if total == 0 {
+		return []models.SupplierPurchaseItem{}, 0, nil
+	}
+
+	listSQL := filterSQL
+	listArgs := append([]any{}, args...)
+	if f.Cursor != nil {
+		listArgs = append(listArgs, f.Cursor.Date, f.Cursor.CreatedAt, f.Cursor.ID)
+		n := len(listArgs)
+		listSQL += fmt.Sprintf(
+			" AND (p.purchase_date, p.created_at, p.id) < ($%d::date, $%d::timestamptz, $%d::uuid)", n-2, n-1, n)
+	}
+	listArgs = append(listArgs, f.Limit+1) // one extra row tells us if there is a next page
+
+	query := fmt.Sprintf(`
+		SELECT p.id, p.supplier_id, s.name, p.purchase_order_id, po.po_no, p.supplier_bill_no,
+		       to_char(p.purchase_date, 'YYYY-MM-DD'),
+		       p.total, p.paid_amount, p.due_amount, p.payment_status, p.status, p.note, p.created_at
+		%s
+		WHERE %s
+		ORDER BY p.purchase_date DESC, p.created_at DESC, p.id DESC
+		LIMIT $%d`, fromSQL, listSQL, len(listArgs))
+
+	rows, err := r.pool.Query(ctx, query, listArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query supplier purchases: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]models.SupplierPurchaseItem, 0, f.Limit+1)
+	for rows.Next() {
+		var it models.SupplierPurchaseItem
+		if err := rows.Scan(
+			&it.PurchaseID, &it.SupplierID, &it.SupplierName, &it.PurchaseOrderID, &it.PurchaseOrderNumber,
+			&it.SupplierBillNo, &it.PurchaseDate,
+			&it.Total, &it.PaidAmount, &it.DueAmount, &it.PaymentStatus, &it.Status, &it.Note, &it.CreatedAt,
+		); err != nil {
+			return nil, 0, fmt.Errorf("scan supplier purchase: %w", err)
+		}
+		items = append(items, it)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("read supplier purchases: %w", err)
+	}
+	return items, total, nil
+}
+
+func (r *purchaseRepository) GetSupplierReturns(ctx context.Context, f models.SupplierReturnListFilter) ([]models.SupplierReturnItem, int, error) {
+	conds := []string{"r.supplier_id = $1"}
+	args := []any{f.SupplierID}
+
+	if f.FromDate != nil {
+		args = append(args, f.FromDate.Format(dateLayout))
+		conds = append(conds, fmt.Sprintf("r.return_date >= $%d::date", len(args)))
+	}
+	if f.ToDate != nil {
+		args = append(args, f.ToDate.Format(dateLayout))
+		conds = append(conds, fmt.Sprintf("r.return_date <= $%d::date", len(args)))
+	}
+	filterSQL := strings.Join(conds, " AND ")
+
+	const fromSQL = `
+		FROM purchase_returns r
+		JOIN purchases p ON p.id = r.purchase_id
+	`
+
+	var total int
+	if err := r.pool.QueryRow(ctx, "SELECT COUNT(*) "+fromSQL+" WHERE "+filterSQL, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count supplier returns: %w", err)
+	}
+	if total == 0 {
+		return []models.SupplierReturnItem{}, 0, nil
+	}
+
+	listSQL := filterSQL
+	listArgs := append([]any{}, args...)
+	if f.Cursor != nil {
+		listArgs = append(listArgs, f.Cursor.Date, f.Cursor.CreatedAt, f.Cursor.ID)
+		n := len(listArgs)
+		listSQL += fmt.Sprintf(
+			" AND (r.return_date, r.created_at, r.id) < ($%d::date, $%d::timestamptz, $%d::uuid)", n-2, n-1, n)
+	}
+	listArgs = append(listArgs, f.Limit+1)
+
+	query := fmt.Sprintf(`
+		SELECT r.id, r.return_no, r.purchase_id, p.supplier_bill_no, r.supplier_id,
+		       to_char(r.return_date, 'YYYY-MM-DD'), r.total, r.note, r.created_at
+		%s
+		WHERE %s
+		ORDER BY r.return_date DESC, r.created_at DESC, r.id DESC
+		LIMIT $%d`, fromSQL, listSQL, len(listArgs))
+
+	rows, err := r.pool.Query(ctx, query, listArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query supplier returns: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]models.SupplierReturnItem, 0, f.Limit+1)
+	for rows.Next() {
+		var it models.SupplierReturnItem
+		if err := rows.Scan(
+			&it.PurchaseReturnID, &it.ReturnNo, &it.PurchaseID, &it.SupplierBillNo, &it.SupplierID,
+			&it.ReturnDate, &it.Total, &it.Note, &it.CreatedAt,
+		); err != nil {
+			return nil, 0, fmt.Errorf("scan supplier return: %w", err)
+		}
+		items = append(items, it)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("read supplier returns: %w", err)
+	}
+	return items, total, nil
 }

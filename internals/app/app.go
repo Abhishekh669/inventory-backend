@@ -42,6 +42,10 @@ type App struct {
 	SupplierPaymentService services.SupplierPaymentService
 	SupplierPaymentHandler handlers.SupplierPaymentHandler
 
+	StockMovementRepo    repository.StockMovementRepository
+	StockMovementService services.StockMovementService
+	StockMovementHandler handlers.StockMovementHandler
+
 	PermissionChecker authMiddleware.PermissionChecker
 }
 
@@ -86,6 +90,11 @@ func New() (*App, error) {
 	supplierPaymentService := services.NewSupplierPaymentService(supplierPaymentRepo)
 	supplierPaymentHandler := handlers.NewSupplierPaymentHandler(supplierPaymentService)
 
+	// Stock Movement
+	stockMovementRepo := repository.NewStockMovementRepository()
+	stockMovementService := services.NewStockMovementService(stockMovementRepo)
+	stockMovementHandler := handlers.NewStockMovementHandler(stockMovementService)
+
 	return &App{
 		UserRepo:    userRepo,
 		UserService: userService,
@@ -118,6 +127,10 @@ func New() (*App, error) {
 		SupplierPaymentRepo:    supplierPaymentRepo,
 		SupplierPaymentService: supplierPaymentService,
 		SupplierPaymentHandler: *supplierPaymentHandler,
+
+		StockMovementRepo:    stockMovementRepo,
+		StockMovementService: stockMovementService,
+		StockMovementHandler: *stockMovementHandler,
 
 		PermissionChecker: *checker,
 	}, nil
