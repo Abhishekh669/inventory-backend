@@ -147,13 +147,13 @@ func (s *supplierPaymentService) CreateAdvancePaymentForSupplierService(
 	}
 
 	paymentData := &models.SupplierPaymentCreationType{
-		SupplierID:    data.SupplierID,
-		Amount:        data.Amount,
-		PaymentMethod: data.PaymentMethod,
-		PaymentType:   models.PaymentTypeAdvance,
-		Note:          data.Note,
+		SupplierID:            data.SupplierID,
+		Amount:                data.Amount,
+		PaymentMethod:         data.PaymentMethod,
+		PaymentType:           models.PaymentTypeAdvance,
+		SupplierBankAccountID: bankAccountForMethod(data.PaymentMethod, data.SupplierBankAccountID), // NEW
+		Note:                  data.Note,
 	}
-
 	_, err := s.repo.CreateAdvancePaymentForSupplier(ctx, paymentData, userId)
 	return err
 }

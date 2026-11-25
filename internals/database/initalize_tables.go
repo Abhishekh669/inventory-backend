@@ -425,6 +425,7 @@ var postgressSchemaOrderedTables = []struct {
                             CHECK (payment_method IN (
                                 'cash', 'bank', 'cheque', 'online'
                             )),
+             supplier_bank_account_id UUID,                
 
             payment_type    VARCHAR(20) NOT NULL DEFAULT 'regular'
                             CHECK (payment_type IN ('advance', 'regular')),
@@ -433,7 +434,10 @@ var postgressSchemaOrderedTables = []struct {
 
             created_by      UUID REFERENCES users(id) ON DELETE SET NULL,
 
-            created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+            CONSTRAINT fk_supplier_payments_bank_account
+                FOREIGN KEY (supplier_bank_account_id, supplier_id)
+                REFERENCES supplier_bank_accounts (id, supplier_id)
         );
 
         CREATE INDEX IF NOT EXISTS idx_supplier_payments_supplier
@@ -444,6 +448,8 @@ var postgressSchemaOrderedTables = []struct {
 
         CREATE INDEX IF NOT EXISTS idx_supplier_payments_supplier_date
         ON supplier_payments(supplier_id, payment_date DESC, created_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_supplier_bank_account ON supplier_payments(supplier_bank_account_id)
     `,
 	},
 	{
@@ -495,6 +501,346 @@ var postgressSchemaOrderedTables = []struct {
             updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
         );
     `,
+	},
+	{
+		Name: "customers",
+		Schema: `
+        CREATE TABLE IF NOT EXISTS customers (
+            id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+            name                VARCHAR(150) NOT NULL,
+            contact_person      VARCHAR(100),
+            phone               VARCHAR(30),
+            email               VARCHAR(150),
+            address             VARCHAR(250),
+            pan_no              VARCHAR(30),
+
+            opening_balance     NUMERIC(14,2) NOT NULL DEFAULT 0,
+            balance             NUMERIC(14,2) NOT NULL DEFAULT 0,
+            credit_balance      NUMERIC(14,2) NOT NULL DEFAULT 0,
+
+            is_active           BOOLEAN NOT NULL DEFAULT TRUE,
+
+            created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_customers_pan
+        ON customers(pan_no)
+        WHERE pan_no IS NOT NULL;
+
+        CREATE INDEX IF NOT EXISTS idx_customers_name
+        ON customers(name);
+
+        CREATE INDEX IF NOT EXISTS idx_customers_phone
+        ON customers(phone);
+
+        CREATE INDEX IF NOT EXISTS idx_customers_created
+        ON customers(created_at DESC, id DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_customers_email
+        ON customers(email);
+    `,
+	},
+	{
+		Name: "sales",
+		Schema: `
+        CREATE TABLE IF NOT EXISTS sales (
+            id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+            bill_no             VARCHAR(30) NOT NULL,
+            fiscal_year         VARCHAR(9) NOT NULL,
+
+            bill_date           DATE NOT NULL DEFAULT CURRENT_DATE,
+
+            customer_id         UUID NOT NULL
+                                REFERENCES customers(id) ON DELETE RESTRICT,
+
+            user_id             UUID REFERENCES users(id) ON DELETE SET NULL,
+
+            subtotal            NUMERIC(14,2) NOT NULL DEFAULT 0,
+            discount            NUMERIC(14,2) NOT NULL DEFAULT 0,
+
+            taxable_amount      NUMERIC(14,2) NOT NULL DEFAULT 0,
+            vat_amount          NUMERIC(14,2) NOT NULL DEFAULT 0,
+
+            total               NUMERIC(14,2) NOT NULL DEFAULT 0,
+
+            paid_amount         NUMERIC(14,2) NOT NULL DEFAULT 0,
+            returned_amount     NUMERIC(14,2) NOT NULL DEFAULT 0,
+
+            due_amount          NUMERIC(14,2)
+                                GENERATED ALWAYS AS (
+                                    total - paid_amount - returned_amount
+                                ) STORED,
+
+            payment_status      VARCHAR(10) NOT NULL DEFAULT 'unpaid'
+                                CHECK (
+                                    payment_status IN ('unpaid', 'partial', 'paid')
+                                ),
+
+            due_date            DATE,
+
+            payment_method      VARCHAR(20)
+                                CHECK (
+                                    payment_method IN (
+                                        'cash', 'bank', 'cheque',
+                                        'qr', 'credit', 'other'
+                                    )
+                                ),
+
+            status              VARCHAR(10) NOT NULL DEFAULT 'completed'
+                                CHECK (
+                                    status IN ('draft', 'completed', 'cancelled')
+                                ),
+
+            printed_count       INT NOT NULL DEFAULT 0,
+
+            created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+            UNIQUE (fiscal_year, bill_no),
+
+            CHECK (total >= 0),
+            CHECK (paid_amount >= 0),
+            CHECK (returned_amount >= 0)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_sales_customer
+        ON sales(customer_id);
+
+        CREATE INDEX IF NOT EXISTS idx_sales_date
+        ON sales(bill_date);
+
+        CREATE INDEX IF NOT EXISTS idx_sales_customer_date
+        ON sales(customer_id, bill_date DESC, created_at DESC);
+    `,
+	},
+	{
+		Name: "sale_items",
+		Schema: `
+        CREATE TABLE IF NOT EXISTS sale_items (
+            id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+            sale_id         UUID NOT NULL
+                            REFERENCES sales(id) ON DELETE CASCADE,
+
+            product_id      UUID NOT NULL
+                            REFERENCES products(id) ON DELETE RESTRICT,
+
+            qty             NUMERIC(14,3) NOT NULL CHECK (qty > 0),
+
+            unit_price      NUMERIC(14,2) NOT NULL,
+
+            cost_price      NUMERIC(14,4) NOT NULL DEFAULT 0,
+
+            discount        NUMERIC(14,2) NOT NULL DEFAULT 0,
+
+            vat_rate        NUMERIC(5,2) NOT NULL DEFAULT 13,
+
+            vat_amount      NUMERIC(14,2) NOT NULL DEFAULT 0,
+
+            line_total      NUMERIC(14,2) NOT NULL DEFAULT 0
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_sale_items_sale
+        ON sale_items(sale_id);
+
+        CREATE INDEX IF NOT EXISTS idx_sale_items_product
+        ON sale_items(product_id);
+    `,
+	},
+	{
+		Name: "sale_returns",
+		Schema: `
+        CREATE TABLE IF NOT EXISTS sale_returns (
+            id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+            return_no       VARCHAR(30) NOT NULL UNIQUE,
+
+            sale_id         UUID NOT NULL
+                            REFERENCES sales(id) ON DELETE RESTRICT,
+
+            customer_id     UUID NOT NULL
+                            REFERENCES customers(id) ON DELETE RESTRICT,
+
+            return_date     DATE NOT NULL DEFAULT CURRENT_DATE,
+
+            refund_mode     VARCHAR(20)
+                            CHECK (
+                                refund_mode IN (
+                                    'cash',
+                                    'bank',
+                                    'credit_note',
+                                    'adjust_due'
+                                )
+                            ),
+
+            total           NUMERIC(14,2) NOT NULL DEFAULT 0,
+
+            note            TEXT,
+
+            created_by      UUID REFERENCES users(id)
+                            ON DELETE SET NULL,
+
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_sale_returns_sale
+        ON sale_returns(sale_id);
+
+        CREATE INDEX IF NOT EXISTS idx_sale_returns_customer
+        ON sale_returns(customer_id);
+    `,
+	},
+	{
+		Name: "sale_return_items",
+		Schema: `
+        CREATE TABLE IF NOT EXISTS sale_return_items (
+            id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+            sale_return_id  UUID NOT NULL
+                            REFERENCES sale_returns(id) ON DELETE CASCADE,
+
+            sale_item_id    UUID NOT NULL
+                            REFERENCES sale_items(id) ON DELETE RESTRICT,
+
+            product_id      UUID NOT NULL
+                            REFERENCES products(id) ON DELETE RESTRICT,
+
+            qty             NUMERIC(14,3) NOT NULL CHECK (qty > 0),
+
+            amount          NUMERIC(14,2) NOT NULL,
+
+            reason          VARCHAR(250),
+
+            restock         BOOLEAN NOT NULL DEFAULT TRUE
+        );
+    `,
+	},
+	{
+		Name: "customer_payments",
+		Schema: `
+        CREATE TABLE IF NOT EXISTS customer_payments (
+            id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+            customer_id     UUID NOT NULL
+                            REFERENCES customers(id) ON DELETE RESTRICT,
+
+            amount          NUMERIC(14,2) NOT NULL CHECK (amount > 0),
+
+            payment_date    DATE NOT NULL DEFAULT CURRENT_DATE,
+
+            payment_method  VARCHAR(20) NOT NULL DEFAULT 'cash'
+                            CHECK (
+                                payment_method IN (
+                                    'cash', 'bank', 'cheque', 'qr', 'other'
+                                )
+                            ),
+
+            payment_type    VARCHAR(20) NOT NULL DEFAULT 'regular'
+                            CHECK (
+                                payment_type IN ('advance', 'regular')
+                            ),
+
+            reference_no    VARCHAR(100),
+
+            note            TEXT,
+
+            created_by      UUID REFERENCES users(id)
+                            ON DELETE SET NULL,
+
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_customer_payments_customer
+        ON customer_payments(customer_id);
+
+        CREATE INDEX IF NOT EXISTS idx_customer_payments_date
+        ON customer_payments(payment_date);
+
+        CREATE INDEX IF NOT EXISTS idx_customer_payments_customer_date
+        ON customer_payments(
+            customer_id,
+            payment_date DESC,
+            created_at DESC
+        );
+    `,
+	},
+	{
+		Name: "customer_payment_allocations",
+		Schema: `
+        CREATE TABLE IF NOT EXISTS customer_payment_allocations (
+            id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+            customer_payment_id UUID NOT NULL
+                                REFERENCES customer_payments(id)
+                                ON DELETE RESTRICT,
+
+            sale_id             UUID NOT NULL
+                                REFERENCES sales(id)
+                                ON DELETE RESTRICT,
+
+            amount              NUMERIC(14,2) NOT NULL
+                                CHECK (amount > 0),
+
+            created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+            UNIQUE (customer_payment_id, sale_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_customer_payment_allocations_sale
+        ON customer_payment_allocations(sale_id);
+
+        CREATE INDEX IF NOT EXISTS idx_customer_payment_allocations_payment
+        ON customer_payment_allocations(customer_payment_id);
+    `,
+	},
+	{
+		Name: "customer_financial_summaries",
+		Schema: `
+        CREATE TABLE IF NOT EXISTS customer_financial_summaries (
+            customer_id          UUID PRIMARY KEY
+                                 REFERENCES customers(id) ON DELETE CASCADE,
+
+            total_sales          NUMERIC(16,2) NOT NULL DEFAULT 0
+                                 CHECK (total_sales >= 0),
+
+            total_payments       NUMERIC(16,2) NOT NULL DEFAULT 0
+                                 CHECK (total_payments >= 0),
+
+            total_returns        NUMERIC(16,2) NOT NULL DEFAULT 0
+                                 CHECK (total_returns >= 0),
+
+            unallocated_payments NUMERIC(16,2) NOT NULL DEFAULT 0
+                                 CHECK (unallocated_payments >= 0),
+
+            updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+    `,
+	},
+	{
+		Name: "supplier_bank_accounts",
+		Schema: `
+    CREATE TABLE IF NOT EXISTS supplier_bank_accounts (
+        id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+        supplier_id     UUID NOT NULL
+                        REFERENCES suppliers(id) ON DELETE CASCADE,
+
+        bank_name       VARCHAR(100) NOT NULL,
+        account_name    VARCHAR(150) NOT NULL,
+        account_number  VARCHAR(50)  NOT NULL,
+        branch          VARCHAR(100),
+
+        is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+        UNIQUE (supplier_id, bank_name, account_number),
+        UNIQUE (id, supplier_id)   -- lets payments prove the account belongs to the same supplier
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_supplier_bank_accounts_supplier
+    ON supplier_bank_accounts(supplier_id);
+`,
 	},
 }
 

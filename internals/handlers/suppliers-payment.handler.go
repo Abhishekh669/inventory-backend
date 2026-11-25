@@ -88,6 +88,11 @@ func (h *SupplierPaymentHandler) CreateAdvancePaymentHandlerForSupplier(c *gin.C
 		user.UserID,
 	)
 	if err != nil {
+		var ve *models.ValidationError
+		if errors.As(err, &ve) {
+			helpers.Error(c, http.StatusBadRequest, ve.Message)
+			return
+		}
 		helpers.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}

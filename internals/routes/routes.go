@@ -17,4 +17,6 @@ func SetUpRoutes(app *gin.Engine, appConfig *app.App) {
 	PurchaseServiceRouter(apiGroup, appConfig)
 	SupplierPaymentServiceRouter(apiGroup, appConfig)
 	StockMovementServiceRouter(apiGroup, appConfig)
+	SupplierBankAccountServiceRouter(apiGroup, appConfig)
+	CustomerServiceRouter(apiGroup, appConfig)
 }

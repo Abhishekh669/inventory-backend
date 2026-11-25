@@ -46,6 +46,7 @@ func NewSupplierPaymentRepository() SupplierPaymentRepository {
 const supplierPaymentFromSQL = `
 	FROM supplier_payments sp
 	LEFT JOIN users u ON u.id = sp.created_by
+	LEFT JOIN supplier_bank_accounts ba ON ba.id = sp.supplier_bank_account_id
 	LEFT JOIN LATERAL (
 		SELECT COALESCE(SUM(a.amount), 0) AS allocated
 		FROM purchase_payment_allocations a
@@ -113,7 +114,8 @@ func (r *supplierPaymentRepository) GetSupplierPayments(
 			sp.id, sp.supplier_id, sp.amount, sp.payment_date,
 			sp.payment_method, sp.payment_type, sp.note,
 			al.allocated,
-			sp.created_by, u.name, sp.created_at
+			sp.created_by, u.name, sp.created_at,
+			sp.supplier_bank_account_id, ba.bank_name, ba.account_name, ba.account_number
 		%s
 		WHERE %s
 		ORDER BY sp.payment_date DESC, sp.created_at DESC, sp.id DESC
@@ -135,6 +137,7 @@ func (r *supplierPaymentRepository) GetSupplierPayments(
 			&method, &pType, &p.Note,
 			&p.AllocatedAmount,
 			&p.CreatedBy, &p.CreatedByName, &p.CreatedAt,
+			&p.SupplierBankAccountID, &p.BankName, &p.AccountName, &p.AccountNumber,
 		); err != nil {
 			rows.Close()
 			return nil, 0, fmt.Errorf("scan supplier payment: %w", err)
@@ -246,14 +249,18 @@ func (r *supplierPaymentRepository) CreateAdvancePaymentForSupplier(ctx context.
 		return uuid.Nil, ErrSupplierNotFound
 	}
 
+	if err := verifyPaymentBankAccount(ctx, tx, data.SupplierID, data.SupplierBankAccountID, false); err != nil {
+		return uuid.Nil, err
+	}
+
 	// 2. Insert the advance payment
 	var paymentID uuid.UUID
 	err = tx.QueryRow(ctx, `
 		INSERT INTO supplier_payments (
 			supplier_id, amount, payment_date,
-			payment_method, payment_type, note, created_by
+			payment_method, payment_type, note, created_by, supplier_bank_account_id
 		)
-		VALUES ($1, $2, COALESCE($3::date, CURRENT_DATE), $4, 'advance', $5, $6)
+		VALUES ($1, $2, COALESCE($3::date, CURRENT_DATE), $4, 'advance', $5, $6, $7)
 		RETURNING id
 	`,
 		data.SupplierID,
@@ -262,6 +269,7 @@ func (r *supplierPaymentRepository) CreateAdvancePaymentForSupplier(ctx context.
 		string(data.PaymentMethod),
 		data.Note,
 		userID,
+		data.SupplierBankAccountID,
 	).Scan(&paymentID)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("insert advance payment: %w", err)
@@ -299,7 +307,11 @@ const supplierLedgerCTE = `
 		       p.note::text AS note,
 		       p.total AS amount,
 		       p.total AS owed_delta,
-		       0::numeric AS adv_delta
+		       0::numeric AS adv_delta,
+		       NULL::uuid AS bank_account_id,
+		       NULL::text AS bank_name,
+		       NULL::text AS account_name,
+		       NULL::text AS account_number
 		FROM purchases p
 		WHERE p.supplier_id = $1 AND p.status = 'posted'
 
@@ -311,8 +323,10 @@ const supplierLedgerCTE = `
 		       sp.note::text,
 		       sp.amount,
 		       0::numeric,
-		       sp.amount
+		       sp.amount,
+		       ba.id, ba.bank_name::text, ba.account_name::text, ba.account_number::text
 		FROM supplier_payments sp
+		LEFT JOIN supplier_bank_accounts ba ON ba.id = sp.supplier_bank_account_id
 		WHERE sp.supplier_id = $1 AND sp.payment_type = 'advance'
 
 		UNION ALL
@@ -323,8 +337,10 @@ const supplierLedgerCTE = `
 		       sp.note::text,
 		       sp.amount,
 		       -sp.amount,
-		       0::numeric
+		       0::numeric,
+		       ba.id, ba.bank_name::text, ba.account_name::text, ba.account_number::text
 		FROM supplier_payments sp
+		LEFT JOIN supplier_bank_accounts ba ON ba.id = sp.supplier_bank_account_id
 		WHERE sp.supplier_id = $1 AND sp.payment_type = 'regular'
 
 		UNION ALL
@@ -337,10 +353,12 @@ const supplierLedgerCTE = `
 		       sp.note::text,
 		       a.amount,
 		       -a.amount,
-		       -a.amount
+		       -a.amount,
+		       ba.id, ba.bank_name::text, ba.account_name::text, ba.account_number::text
 		FROM purchase_payment_allocations a
 		JOIN supplier_payments sp ON sp.id = a.supplier_payment_id
 		JOIN purchases p          ON p.id  = a.purchase_id
+		LEFT JOIN supplier_bank_accounts ba ON ba.id = sp.supplier_bank_account_id
 		WHERE sp.supplier_id = $1
 		  AND sp.payment_type = 'advance'
 		  AND p.status = 'posted'
@@ -353,7 +371,8 @@ const supplierLedgerCTE = `
 		       pr.note::text,
 		       pr.total,
 		       -pr.total,
-		       0::numeric
+		       0::numeric,
+		       NULL::uuid, NULL::text, NULL::text, NULL::text
 		FROM purchase_returns pr
 		WHERE pr.supplier_id = $1
 	),
@@ -473,7 +492,8 @@ func (r *supplierPaymentRepository) GetSupplierLedger(
 		SELECT entry_type, id, entry_date, created_at, sort_rank,
 		       reference, description, note, amount,
 		       GREATEST(owed_net, 0),
-		       adv_net + GREATEST(-owed_net, 0)
+		       adv_net + GREATEST(-owed_net, 0),
+		       bank_account_id, bank_name, account_name, account_number
 		FROM ledger
 		WHERE %s
 		ORDER BY entry_date DESC, created_at DESC, sort_rank DESC, id DESC
@@ -494,6 +514,7 @@ func (r *supplierPaymentRepository) GetSupplierLedger(
 			&eType, &e.ID, &e.EntryDate, &e.CreatedAt, &e.SortRank,
 			&e.Reference, &e.Description, &e.Note, &e.Amount,
 			&e.Balance, &e.Credit,
+			&e.SupplierBankAccountID, &e.BankName, &e.AccountName, &e.AccountNumber,
 		); err != nil {
 			return nil, fmt.Errorf("scan ledger entry: %w", err)
 		}

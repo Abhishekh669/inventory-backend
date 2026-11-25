@@ -499,14 +499,18 @@ func (r *purchaseRepository) CreatePurchase(ctx context.Context, userID uuid.UUI
 
 	// 5. payment made together with the purchase
 	if req.PaidAmount.IsPositive() {
+		if err = verifyPaymentBankAccount(ctx, tx, supplierID, req.SupplierBankAccountID, false); err != nil {
+			return uuid.Nil, err
+		}
 		var paymentID uuid.UUID
 		err = tx.QueryRow(ctx, `
 			INSERT INTO supplier_payments (
-				supplier_id, amount, payment_date, payment_method, payment_type, note, created_by
-			) VALUES ($1, $2::numeric, $3::date, $4, 'regular', $5, $6)
+				supplier_id, amount, payment_date, payment_method, payment_type, note, created_by,
+				supplier_bank_account_id
+			) VALUES ($1, $2::numeric, $3::date, $4, 'regular', $5, $6, $7)
 			RETURNING id`,
 			supplierID, req.PaidAmount.String(), req.PurchaseDate, string(req.PaymentMethod),
-			"Payment for purchase bill "+req.SupplierBillNo, userID,
+			"Payment for purchase bill "+req.SupplierBillNo, userID, req.SupplierBankAccountID,
 		).Scan(&paymentID)
 		if err != nil {
 			return uuid.Nil, fmt.Errorf("insert supplier payment: %w", err)
@@ -678,10 +682,12 @@ func (r *purchaseRepository) GetPurchaseDataById(ctx context.Context, purchaseID
 	// 4. payments allocated to this purchase
 	payRows, err := r.pool.Query(ctx, `
 		SELECT sp.id, ppa.amount, to_char(sp.payment_date, 'YYYY-MM-DD'),
-		       sp.payment_method, sp.payment_type, sp.note, cu.name, sp.created_at
+		       sp.payment_method, sp.payment_type, sp.note, cu.name, sp.created_at,
+		       sp.supplier_bank_account_id, ba.bank_name, ba.account_name, ba.account_number
 		FROM purchase_payment_allocations ppa
 		JOIN supplier_payments sp ON sp.id = ppa.supplier_payment_id
 		LEFT JOIN users cu ON cu.id = sp.created_by
+		LEFT JOIN supplier_bank_accounts ba ON ba.id = sp.supplier_bank_account_id
 		WHERE ppa.purchase_id = $1
 		ORDER BY sp.payment_date DESC, sp.created_at DESC`,
 		purchaseID,
@@ -693,7 +699,8 @@ func (r *purchaseRepository) GetPurchaseDataById(ctx context.Context, purchaseID
 	for payRows.Next() {
 		var pay models.PurchasePayment
 		if err := payRows.Scan(&pay.ID, &pay.Amount, &pay.PaymentDate,
-			&pay.PaymentMethod, &pay.PaymentType, &pay.Note, &pay.CreatedByName, &pay.CreatedAt); err != nil {
+			&pay.PaymentMethod, &pay.PaymentType, &pay.Note, &pay.CreatedByName, &pay.CreatedAt,
+			&pay.SupplierBankAccountID, &pay.BankName, &pay.AccountName, &pay.AccountNumber); err != nil {
 			return nil, fmt.Errorf("scan payment: %w", err)
 		}
 		resp.Payments = append(resp.Payments, pay)
@@ -1415,11 +1422,17 @@ func (r *purchaseRepository) CreatePurchasePayment(ctx context.Context, userID, 
 
 	switch req.Source {
 	case models.PaymentTypeRegular:
+		if err = verifyPaymentBankAccount(ctx, tx, cur.SupplierID, req.SupplierBankAccountID, false); err != nil {
+			return uuid.Nil, err
+		}
 		if err = tx.QueryRow(ctx, `
-			INSERT INTO supplier_payments (supplier_id, amount, payment_date, payment_method, payment_type, note, created_by)
-			VALUES ($1, $2::numeric, $3::date, $4, 'regular', $5, $6)
+			INSERT INTO supplier_payments (
+				supplier_id, amount, payment_date, payment_method, payment_type, note, created_by,
+				supplier_bank_account_id
+			) VALUES ($1, $2::numeric, $3::date, $4, 'regular', $5, $6, $7)
 			RETURNING id`,
 			cur.SupplierID, req.Amount.String(), req.PaymentDate, string(req.PaymentMethod), note, userID,
+			req.SupplierBankAccountID,
 		).Scan(&paymentID); err != nil {
 			return uuid.Nil, fmt.Errorf("insert supplier payment: %w", err)
 		}
@@ -1552,14 +1565,21 @@ func (r *purchaseRepository) UpdatePurchasePayment(ctx context.Context, userID, 
 		if pay.AllocCount != 1 || !pay.AllocAmount.Equal(pay.PaymentAmount) {
 			return bad("this payment is shared with other purchases, so it cannot be edited here")
 		}
+		if err = verifyPaymentBankAccount(ctx, tx, cur.SupplierID, req.SupplierBankAccountID, true); err != nil {
+			return err
+		}
 		if _, err = tx.Exec(ctx, `
 			UPDATE supplier_payments
 			SET amount = $2::numeric,
 			    payment_date = COALESCE(NULLIF($3, '')::date, payment_date),
 			    payment_method = COALESCE(NULLIF($4, ''), payment_method),
+			    supplier_bank_account_id = CASE
+			        WHEN COALESCE(NULLIF($4, ''), payment_method) = 'cash' THEN NULL
+			        ELSE $6::uuid END,
 			    note = $5
 			WHERE id = $1`,
 			paymentID, req.Amount.String(), req.PaymentDate, string(req.PaymentMethod), req.Note,
+			req.SupplierBankAccountID,
 		); err != nil {
 			return fmt.Errorf("update supplier payment: %w", err)
 		}

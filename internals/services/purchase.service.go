@@ -290,6 +290,13 @@ func normalizeAndValidate(req *models.CreatePurchaseRequest) error {
 		return bad("invalid payment method")
 	}
 
+	// the account only matters when something is paid now, and never for cash
+	if req.PaidAmount.IsPositive() {
+		req.SupplierBankAccountID = bankAccountForMethod(req.PaymentMethod, req.SupplierBankAccountID)
+	} else {
+		req.SupplierBankAccountID = nil
+	}
+
 	items := make([]models.CreatePurchaseItemRequest, 0, len(req.Items))
 	seen := map[uuid.UUID]bool{}
 	for _, it := range req.Items {
@@ -493,6 +500,10 @@ func (s *purchaseService) UpdatePurchasePayment(ctx context.Context, userID, pur
 		return bad("invalid payment method")
 	}
 
+	if req.PaymentMethod == models.PaymentMethodCash {
+		req.SupplierBankAccountID = nil // NEW
+	}
+
 	if req.Note != nil {
 		n := strings.TrimSpace(*req.Note)
 		if n == "" {
@@ -540,8 +551,10 @@ func (s *purchaseService) CreatePurchasePayment(ctx context.Context, userID, pur
 		default:
 			return uuid.Nil, bad("invalid payment method")
 		}
+		req.SupplierBankAccountID = bankAccountForMethod(req.PaymentMethod, req.SupplierBankAccountID)
 	case models.PaymentTypeAdvance:
 		req.PaymentMethod = ""
+		req.SupplierBankAccountID = nil
 	default:
 		return uuid.Nil, bad("choose how to pay: manually or from advance credit")
 	}

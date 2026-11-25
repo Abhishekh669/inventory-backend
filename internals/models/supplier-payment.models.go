@@ -45,19 +45,22 @@ type PurchasePaymentAllocation struct {
 }
 
 type CreateAdvancePaymentType struct {
-	SupplierID    uuid.UUID       `json:"supplier_id" binding:"required"`
-	Amount        decimal.Decimal `json:"amount" binding:"required"`
-	PaymentMethod PaymentMethod   `json:"payment_method" binding:"required"`
-	Note          *string         `json:"note"`
+	SupplierID            uuid.UUID       `json:"supplier_id" binding:"required"`
+	Amount                decimal.Decimal `json:"amount" binding:"required"`
+	PaymentMethod         PaymentMethod   `json:"payment_method" binding:"required"`
+	SupplierBankAccountID *uuid.UUID      `json:"supplier_bank_account_id"` // NEW, optional
+	Note                  *string         `json:"note"`
 }
 
 type SupplierPaymentCreationType struct {
-	SupplierID    uuid.UUID       `json:"supplier_id" binding:"required"`
-	Amount        decimal.Decimal `json:"amount" binding:"required"`
-	PaymentDate   *time.Time      `json:"payment_date"`
-	PaymentMethod PaymentMethod   `json:"payment_method" binding:"required"`
-	PaymentType   PaymentType     `json:"payment_type" binding:"required"`
-	Note          *string         `json:"note"`
+	SupplierID            uuid.UUID       `json:"supplier_id" binding:"required"`
+	Amount                decimal.Decimal `json:"amount" binding:"required"`
+	PaymentDate           *time.Time      `json:"payment_date"`
+	PaymentMethod         PaymentMethod   `json:"payment_method" binding:"required"`
+	PaymentType           PaymentType     `json:"payment_type" binding:"required"`
+	Note                  *string         `json:"note"`
+	SupplierBankAccountID *uuid.UUID      `json:"supplier_bank_account_id"` // NEW
+
 }
 
 type SupplierPaymentStatus string
@@ -95,6 +98,11 @@ type SupplierIDPaymentResponse struct {
 	CreatedBy     *uuid.UUID `json:"created_by"`
 	CreatedByName *string    `json:"created_by_name"`
 	CreatedAt     time.Time  `json:"created_at"`
+
+	SupplierBankAccountID *uuid.UUID `json:"supplier_bank_account_id"`
+	BankName              *string    `json:"bank_name"`
+	AccountName           *string    `json:"account_name"` // NEW
+	AccountNumber         *string    `json:"account_number"`
 }
 
 // SupplierFinancialSummary mirrors supplier_financial_summaries plus two derived numbers.
@@ -169,6 +177,7 @@ const (
 //	balance = what we owe the supplier after this line
 //	credit  = advance the supplier holds for us after this line (supplier owes us)
 //	Only one of the two is above zero.
+
 type SupplierLedgerEntry struct {
 	ID          uuid.UUID               `json:"id"` // purchase / payment / return / allocation id
 	EntryType   SupplierLedgerEntryType `json:"entry_type"`
@@ -180,7 +189,14 @@ type SupplierLedgerEntry struct {
 	Balance     decimal.Decimal         `json:"balance"`
 	Credit      decimal.Decimal         `json:"credit"`
 	CreatedAt   time.Time               `json:"created_at"`
-	SortRank    int                     `json:"-"` // tie-break, only used for the cursor
+
+	// NEW: the bank account of the payment (null for purchases, returns and cash)
+	SupplierBankAccountID *uuid.UUID `json:"supplier_bank_account_id"`
+	BankName              *string    `json:"bank_name"`
+	AccountName           *string    `json:"account_name"`
+	AccountNumber         *string    `json:"account_number"`
+
+	SortRank int `json:"-"` // tie-break, only used for the cursor
 }
 
 type SupplierLedgerSupplier struct {

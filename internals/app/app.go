@@ -46,6 +46,14 @@ type App struct {
 	StockMovementService services.StockMovementService
 	StockMovementHandler handlers.StockMovementHandler
 
+	SupplierBankAccountRepo    repository.SupplierBankAccountRepository
+	SupplierBankAccountService services.SupplierBankAccountService
+	SupplierBankAccountHandler handlers.SupplierBankAccountHandler
+
+	CustomerRepo    repository.CustomerRepository
+	CustomerService services.CustomerService
+	CustomerHandler handlers.CustomerHandler
+
 	PermissionChecker authMiddleware.PermissionChecker
 }
 
@@ -95,6 +103,16 @@ func New() (*App, error) {
 	stockMovementService := services.NewStockMovementService(stockMovementRepo)
 	stockMovementHandler := handlers.NewStockMovementHandler(stockMovementService)
 
+	// Supplier Bank Account
+	supplierBankAccountRepo := repository.NewSupplierBankAccountRepository()
+	supplierBankAccountService := services.NewSupplierBankAccountService(supplierBankAccountRepo)
+	supplierBankAccountHandler := handlers.NewSupplierBankAccountHandler(supplierBankAccountService)
+
+	// Customer
+	customerRepo := repository.NewCustomerRepository()
+	customerService := services.NewCustomerService(customerRepo)
+	customerHandler := handlers.NewCustomerHandler(customerService)
+
 	return &App{
 		UserRepo:    userRepo,
 		UserService: userService,
@@ -131,6 +149,14 @@ func New() (*App, error) {
 		StockMovementRepo:    stockMovementRepo,
 		StockMovementService: stockMovementService,
 		StockMovementHandler: *stockMovementHandler,
+
+		SupplierBankAccountRepo:    supplierBankAccountRepo,
+		SupplierBankAccountService: supplierBankAccountService,
+		SupplierBankAccountHandler: *supplierBankAccountHandler,
+
+		CustomerRepo:    customerRepo,
+		CustomerService: customerService,
+		CustomerHandler: *customerHandler,
 
 		PermissionChecker: *checker,
 	}, nil

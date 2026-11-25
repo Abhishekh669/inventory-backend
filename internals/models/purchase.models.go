@@ -178,19 +178,20 @@ type CreatePurchaseItemRequest struct {
 }
 
 type CreatePurchaseRequest struct {
-	PurchaseOrderID uuid.UUID                   `json:"purchase_order_id"`
-	SupplierBillNo  string                      `json:"supplier_bill_no"`
-	PurchaseDate    string                      `json:"purchase_date"`
-	DueDate         *string                     `json:"due_date"`
-	ExciseDuty      decimal.Decimal             `json:"excise_duty"`
-	SpecialDiscount decimal.Decimal             `json:"special_discount"`
-	Discount        decimal.Decimal             `json:"discount"`
-	VatRate         decimal.Decimal             `json:"vat_rate"`
-	FreightCharge   decimal.Decimal             `json:"freight_charge"`
-	PaidAmount      decimal.Decimal             `json:"paid_amount"`
-	PaymentMethod   PaymentMethod               `json:"payment_method"`
-	Note            *string                     `json:"note"`
-	Items           []CreatePurchaseItemRequest `json:"items"`
+	PurchaseOrderID       uuid.UUID                   `json:"purchase_order_id"`
+	SupplierBillNo        string                      `json:"supplier_bill_no"`
+	PurchaseDate          string                      `json:"purchase_date"`
+	DueDate               *string                     `json:"due_date"`
+	ExciseDuty            decimal.Decimal             `json:"excise_duty"`
+	SpecialDiscount       decimal.Decimal             `json:"special_discount"`
+	Discount              decimal.Decimal             `json:"discount"`
+	VatRate               decimal.Decimal             `json:"vat_rate"`
+	FreightCharge         decimal.Decimal             `json:"freight_charge"`
+	PaidAmount            decimal.Decimal             `json:"paid_amount"`
+	PaymentMethod         PaymentMethod               `json:"payment_method"`
+	SupplierBankAccountID *uuid.UUID                  `json:"supplier_bank_account_id"`
+	Note                  *string                     `json:"note"`
+	Items                 []CreatePurchaseItemRequest `json:"items"`
 }
 
 // ---- computed by the service, persisted by the repository ----
@@ -269,14 +270,18 @@ type PurchaseOrderInfo struct {
 }
 
 type PurchasePayment struct {
-	ID            uuid.UUID       `json:"id"`
-	Amount        decimal.Decimal `json:"amount"` // the part allocated to this purchase
-	PaymentDate   string          `json:"payment_date"`
-	PaymentMethod string          `json:"payment_method"`
-	PaymentType   string          `json:"payment_type"`
-	Note          *string         `json:"note"`
-	CreatedByName *string         `json:"created_by_name"`
-	CreatedAt     time.Time       `json:"created_at"`
+	ID                    uuid.UUID       `json:"id"`
+	Amount                decimal.Decimal `json:"amount"` // the part allocated to this purchase
+	PaymentDate           string          `json:"payment_date"`
+	PaymentMethod         string          `json:"payment_method"`
+	PaymentType           string          `json:"payment_type"`
+	Note                  *string         `json:"note"`
+	CreatedByName         *string         `json:"created_by_name"`
+	CreatedAt             time.Time       `json:"created_at"`
+	SupplierBankAccountID *uuid.UUID      `json:"supplier_bank_account_id"`
+	BankName              *string         `json:"bank_name"`
+	AccountName           *string         `json:"account_name"` // NEW
+	AccountNumber         *string         `json:"account_number"`
 }
 type PurchaseByIdResponse struct {
 	SupplierData       PurchaseSupplier          `json:"supplier_data"`
@@ -321,11 +326,12 @@ type PurchaseReturnCalc struct {
 }
 
 type CreatePurchasePaymentRequest struct {
-	Amount        decimal.Decimal `json:"amount"`
-	PaymentDate   string          `json:"payment_date"`
-	Source        PaymentType     `json:"source"`
-	PaymentMethod PaymentMethod   `json:"payment_method"`
-	Note          *string         `json:"note"`
+	Amount                decimal.Decimal `json:"amount"`
+	PaymentDate           string          `json:"payment_date"`
+	Source                PaymentType     `json:"source"`
+	PaymentMethod         PaymentMethod   `json:"payment_method"`
+	SupplierBankAccountID *uuid.UUID      `json:"supplier_bank_account_id"` // NEW, optional
+	Note                  *string         `json:"note"`
 }
 
 type PurchaseReturnItemDetail struct {
@@ -353,10 +359,11 @@ type PurchaseReturnDetail struct {
 }
 
 type UpdatePurchasePaymentRequest struct {
-	Amount        decimal.Decimal `json:"amount"`
-	PaymentDate   string          `json:"payment_date"`
-	PaymentMethod PaymentMethod   `json:"payment_method"`
-	Note          *string         `json:"note"`
+	Amount                decimal.Decimal `json:"amount"`
+	PaymentDate           string          `json:"payment_date"`
+	PaymentMethod         PaymentMethod   `json:"payment_method"`
+	SupplierBankAccountID *uuid.UUID      `json:"supplier_bank_account_id"` // NEW, optional
+	Note                  *string         `json:"note"`
 }
 
 // ADD to: internals/models/purchase.go (or keep as its own file in package models)
